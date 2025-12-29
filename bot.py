@@ -4,7 +4,8 @@ import random
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-load_dotenv() 
+# Load environment variables dari .env file
+load_dotenv()
 
 import httpx
 from telegram import (
@@ -26,15 +27,15 @@ from telegram.request import HTTPXRequest
 # =====================================================
 # KONFIGURASI
 # =====================================================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")        # bot utama
-LOG_BOT_TOKEN = os.environ.get("LOG_BOT_TOKEN")  # bot logger (opsional)
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+LOG_BOT_TOKEN = os.environ.get("LOG_BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0"))
 BOT_NAME = os.environ.get("BOT_NAME", "VETERAN_BOT")
 
-SHEERID_BASE_URL = "https://services.sheerid.com"  # [web:2]
+SHEERID_BASE_URL = "https://services.sheerid.com"
 STEP_TIMEOUT = 300  # 5 menit
 
-# Military organizations (dari spek kamu) [web:6][web:73]
+# Military organizations
 MIL_ORGS = {
     "Army":       {"id": 4070, "name": "Army"},
     "Air Force":  {"id": 4073, "name": "Air Force"},
@@ -67,22 +68,21 @@ LOG_API_URL = (
 )
 
 # =====================================================
-# STATE CONVERSATION /veteran
+# STATE CONVERSATION /veteran (URUTAN BARU)
 # =====================================================
 (
     V_URL,          # minta link SheerID
     V_STATUS,       # pilih status military
+    V_ORG,          # pilih branch (DIPINDAH KE SINI)
     V_NAME,         # nama lengkap
     V_BIRTH,        # tanggal lahir
+    V_DISCHARGE,    # tanggal discharge (DIPINDAH KE SINI)
     V_EMAIL,        # email
-    V_PHONE,        # phone (optional)
-    V_ORG,          # pilih branch
-    V_DISCHARGE,    # tanggal discharge
     V_CONFIRM,      # konfirmasi data
-) = range(9)
+) = range(8)  # SEKARANG HANYA 8 STATE (PHONE DIHAPUS)
 
 # storage sederhana
-v_user_data = {}  # per user_id
+v_user_data = {}
 
 # =====================================================
 # LOGGING VIA BOT LOGGER
@@ -105,7 +105,6 @@ async def send_log(text: str):
     except Exception as e:
         print(f"❌ Exception sending log: {e}")
 
-
 async def log_user_start(update: Update, command_name: str):
     user = update.effective_user
     chat = update.effective_chat
@@ -118,7 +117,6 @@ async def log_user_start(update: Update, command_name: str):
         f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     await send_log(text)
-
 
 async def log_verification_result(
     user_id: int,
@@ -169,7 +167,6 @@ async def step_timeout_job(context: ContextTypes.DEFAULT_TYPE):
 
     print(f"⏰ Timeout {step_name} untuk user {user_id}")
 
-
 def set_step_timeout(
     context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, step: str
 ):
@@ -191,13 +188,12 @@ def set_step_timeout(
         data={"step": step},
     )
 
-
 def clear_all_timeouts(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     if context.job_queue is None:
         print("⚠️ JobQueue is None, skip clear_all_timeouts")
         return
 
-    for step in ["URL", "STATUS", "NAME", "BIRTH", "EMAIL", "PHONE", "ORG", "DISCHARGE"]:
+    for step in ["URL", "STATUS", "ORG", "NAME", "BIRTH", "DISCHARGE", "EMAIL"]:
         job_name = f"timeout_veteran_{step}_{user_id}"
         for job in context.job_queue.get_jobs_by_name(job_name):
             job.schedule_removal()
@@ -236,7 +232,6 @@ async def submit_military_flow(
     last_name: str,
     birth_date: str,
     email: str,
-    phone: str,
     org: dict,
     discharge_date: str,
 ) -> dict:
@@ -244,7 +239,6 @@ async def submit_military_flow(
     Flow:
     1) POST collectMilitaryStatus
     2) POST collectInactiveMilitaryPersonalInfo
-    (tanpa bearer token, nebeng verificationId dari link user, sama konsep dengan teacher bot kamu). [web:2][web:8][web:75]
     """
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
@@ -275,14 +269,14 @@ async def submit_military_flow(
                 "which I am seeking a discount, and I understand that my personal information "
                 "will be shared with SheerID as a processor/third-party service provider in "
                 "order for SheerID to confirm my eligibility for a special offer."
-            )  # disingkat dari teks resmi untuk bot. [web:18]
+            )
 
             payload2 = {
                 "firstName": first_name,
                 "lastName": last_name,
                 "birthDate": birth_date,
                 "email": email,
-                "phoneNumber": phone,
+                "phoneNumber": "",  # KOSONGKAN PHONE
                 "organization": {
                     "id": org["id"],
                     "name": org["name"],
@@ -317,7 +311,7 @@ async def submit_military_flow(
             return {"success": False, "message": msg}
 
 # =====================================================
-# HANDLER /veteran
+# HANDLER /veteran (URUTAN BARU: STATUS → ORG → NAME → BIRTH → DISCHARGE → EMAIL)
 # =====================================================
 
 async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -347,7 +341,6 @@ async def veteran_get_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     url = update.message.text.strip()
 
-    # bisa disesuaikan pattern-nya; di contoh teacher pakai 24 hex
     match = re.search(r"verificationId=([A-Za-z0-9\-]+)", url)
     if not match:
         await update.message.reply_text(
@@ -387,7 +380,7 @@ async def veteran_status_callback(update: Update, context: ContextTypes.DEFAULT_
         )
         return ConversationHandler.END
 
-    data = query.data  # status_VETERAN / status_RETIRED / status_ACTIVE_DUTY
+    data = query.data
     if not data.startswith("status_"):
         await query.edit_message_text(
             "❌ Invalid status.\n\nKirim /veteran lagi.",
@@ -399,10 +392,56 @@ async def veteran_status_callback(update: Update, context: ContextTypes.DEFAULT_
     v_user_data[user_id]["status"] = status
 
     clear_all_timeouts(context, user_id)
-    set_step_timeout(context, chat_id, user_id, "NAME")
+    set_step_timeout(context, chat_id, user_id, "ORG")
 
+    # LANGSUNG KE BRANCH/ORG (SESUAI FORM)
     await query.edit_message_text(
         f"✅ Status: `{status}`\n\n"
+        "Pilih *branch of service* kamu:",
+        parse_mode="Markdown",
+        reply_markup=ORG_KEYBOARD,
+    )
+    return V_ORG
+
+async def veteran_org_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+
+    if user_id not in v_user_data:
+        await query.edit_message_text(
+            "❌ *Session expired*\n\n"
+            "Silakan /veteran lagi.",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    data = query.data
+    if not data.startswith("org_"):
+        await query.edit_message_text(
+            "❌ Invalid organization.\n\nKirim /veteran lagi.",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    org_name = data.split("_", 1)[1]
+    org = MIL_ORGS.get(org_name)
+    if not org:
+        await query.edit_message_text(
+            "❌ Unknown organization.\n\nKirim /veteran lagi.",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    v_user_data[user_id]["organization"] = org
+
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "NAME")
+
+    # SETELAH ORG → NAME
+    await query.edit_message_text(
+        f"✅ Branch: *{org_name}*\n\n"
         "Kirim *nama lengkap* kamu.\n"
         "Contoh: `John Michael Smith`\n\n"
         "*⏰ Kamu punya 5 menit*",
@@ -462,103 +501,11 @@ async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     v_user_data[user_id]["birth_date"] = birth
 
     clear_all_timeouts(context, user_id)
-    set_step_timeout(context, chat_id, user_id, "EMAIL")
-
-    await update.message.reply_text(
-        f"✅ *Birth date:* `{birth}`\n\n"
-        "Kirim *email* kamu.\n\n"
-        "*⏰ Kamu punya 5 menit*",
-        parse_mode="Markdown",
-    )
-    return V_EMAIL
-
-async def veteran_get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    email = update.message.text.strip()
-
-    if "@" not in email or "." not in email:
-        await update.message.reply_text(
-            "❌ Format email tidak valid.\n\n"
-            "*⏰ Kamu punya 5 menit lagi*",
-            parse_mode="Markdown",
-        )
-        set_step_timeout(context, chat_id, user_id, "EMAIL")
-        return V_EMAIL
-
-    v_user_data.setdefault(user_id, {})
-    v_user_data[user_id]["email"] = email
-
-    clear_all_timeouts(context, user_id)
-    set_step_timeout(context, chat_id, user_id, "PHONE")
-
-    await update.message.reply_text(
-        f"✅ *Email:* `{email}`\n\n"
-        "Kirim *nomor telepon* (boleh kosong, kirim `-` kalau tidak ada).\n\n"
-        "*⏰ Kamu punya 5 menit*",
-        parse_mode="Markdown",
-    )
-    return V_PHONE
-
-async def veteran_get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    phone = update.message.text.strip()
-    if phone == "-":
-        phone = ""
-
-    v_user_data.setdefault(user_id, {})
-    v_user_data[user_id]["phone"] = phone
-
-    clear_all_timeouts(context, user_id)
-    set_step_timeout(context, chat_id, user_id, "ORG")
-
-    await update.message.reply_text(
-        "✅ *Phone saved*\n\n"
-        "Pilih *branch / organization* kamu:",
-        parse_mode="Markdown",
-        reply_markup=ORG_KEYBOARD,
-    )
-    return V_ORG
-
-async def veteran_org_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    chat_id = query.message.chat_id
-
-    if user_id not in v_user_data:
-        await query.edit_message_text(
-            "❌ *Session expired*\n\n"
-            "Silakan /veteran lagi.",
-            parse_mode="Markdown",
-        )
-        return ConversationHandler.END
-
-    data = query.data  # org_Army / org_Navy / etc
-    if not data.startswith("org_"):
-        await query.edit_message_text(
-            "❌ Invalid organization.\n\nKirim /veteran lagi.",
-            parse_mode="Markdown",
-        )
-        return ConversationHandler.END
-
-    org_name = data.split("_", 1)[1]
-    org = MIL_ORGS.get(org_name)
-    if not org:
-        await query.edit_message_text(
-            "❌ Unknown organization.\n\nKirim /veteran lagi.",
-            parse_mode="Markdown",
-        )
-        return ConversationHandler.END
-
-    v_user_data[user_id]["organization"] = org
-
-    clear_all_timeouts(context, user_id)
     set_step_timeout(context, chat_id, user_id, "DISCHARGE")
 
-    await query.edit_message_text(
-        f"✅ Branch: *{org_name}*\n\n"
+    # SETELAH BIRTH → DISCHARGE (SESUAI FORM)
+    await update.message.reply_text(
+        f"✅ *Birth date:* `{birth}`\n\n"
         "Kirim *discharge date* (tanggal keluar / pensiun) format `YYYY-MM-DD`.\n"
         "Kalau masih aktif, pakai tanggal yang masuk akal.\n\n"
         "*⏰ Kamu punya 5 menit*",
@@ -584,17 +531,47 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
     v_user_data.setdefault(user_id, {})
     v_user_data[user_id]["discharge_date"] = ddate
 
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "EMAIL")
+
+    # SETELAH DISCHARGE → EMAIL
+    await update.message.reply_text(
+        f"✅ *Discharge date:* `{ddate}`\n\n"
+        "Kirim *email* kamu.\n\n"
+        "*⏰ Kamu punya 5 menit*",
+        parse_mode="Markdown",
+    )
+    return V_EMAIL
+
+async def veteran_get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    email = update.message.text.strip()
+
+    if "@" not in email or "." not in email:
+        await update.message.reply_text(
+            "❌ Format email tidak valid.\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
+        )
+        set_step_timeout(context, chat_id, user_id, "EMAIL")
+        return V_EMAIL
+
+    v_user_data.setdefault(user_id, {})
+    v_user_data[user_id]["email"] = email
+
+    # LANGSUNG KE KONFIRMASI
     data = v_user_data[user_id]
     summary = (
         "🔎 *Konfirmasi data veteran:*\n\n"
         f"VerificationId: `{data['verification_id']}`\n"
         f"Status: `{data['status']}`\n"
-        f"Name: `{data['full_name']}`\n"
-        f"Birth date: `{data['birth_date']}`\n"
-        f"Email: `{data['email']}`\n"
-        f"Phone: `{data['phone']}`\n"
         f"Branch: `{data['organization']['name']}` (id={data['organization']['id']})\n"
-        f"Discharge date: `{data['discharge_date']}`\n\n"
+        f"First Name: `{data['first_name']}`\n"
+        f"Last Name: `{data['last_name']}`\n"
+        f"Birth date: `{data['birth_date']}`\n"
+        f"Discharge date: `{data['discharge_date']}`\n"
+        f"Email: `{data['email']}`\n\n"
         "Ketik `OK` untuk submit ke SheerID, atau `/cancel` untuk batal."
     )
 
@@ -639,7 +616,6 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         last_name=data["last_name"],
         birth_date=data["birth_date"],
         email=data["email"],
-        phone=data["phone"],
         org=data["organization"],
         discharge_date=data["discharge_date"],
     )
@@ -722,7 +698,7 @@ def main():
         write_timeout=30,
         connect_timeout=10,
         pool_timeout=10,
-    )  # [web:66][web:70]
+    )
 
     app = Application.builder().token(BOT_TOKEN).request(request).build()
 
@@ -731,12 +707,11 @@ def main():
         states={
             V_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_url)],
             V_STATUS: [CallbackQueryHandler(veteran_status_callback, pattern="^status_")],
+            V_ORG: [CallbackQueryHandler(veteran_org_callback, pattern="^org_")],  # DIPINDAH KE SINI
             V_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_name)],
             V_BIRTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_birth)],
+            V_DISCHARGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_discharge)],  # DIPINDAH KE SINI
             V_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_email)],
-            V_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_phone)],
-            V_ORG: [CallbackQueryHandler(veteran_org_callback, pattern="^org_")],
-            V_DISCHARGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_discharge)],
             V_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_confirm)],
         },
         fallbacks=[CommandHandler("cancel", veteran_cancel)],
@@ -748,7 +723,6 @@ def main():
 
     print("🚀 Veteran bot is starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()
