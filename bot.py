@@ -71,15 +71,15 @@ LOG_API_URL = (
 # STATE CONVERSATION /veteran (URUTAN BARU)
 # =====================================================
 (
-    V_URL,          # minta link SheerID
-    V_STATUS,       # pilih status military
-    V_ORG,          # pilih branch (DIPINDAH KE SINI)
-    V_NAME,         # nama lengkap
-    V_BIRTH,        # tanggal lahir
-    V_DISCHARGE,    # tanggal discharge (DIPINDAH KE SINI)
-    V_EMAIL,        # email
-    V_CONFIRM,      # konfirmasi data
-) = range(8)  # SEKARANG HANYA 8 STATE (PHONE DIHAPUS)
+    V_URL,    
+    V_STATUS,     
+    V_ORG,        
+    V_NAME,        
+    V_BIRTH,     
+    V_DISCHARGE,
+    V_EMAIL,   
+    V_CONFIRM,      
+) = range(8)  
 
 # storage sederhana
 v_user_data = {}
