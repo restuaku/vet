@@ -2,6 +2,9 @@ import os
 import re
 import random
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+load_dotenv() 
 
 import httpx
 from telegram import (
