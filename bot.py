@@ -68,7 +68,7 @@ LOG_API_URL = (
 )
 
 # =====================================================
-# STATE CONVERSATION /veteran (URUTAN BARU)
+# STATE CONVERSATION /veteran
 # =====================================================
 (
     V_URL,    
@@ -83,6 +83,33 @@ LOG_API_URL = (
 
 # storage sederhana
 v_user_data = {}
+
+# =====================================================
+# HELPER PARSE DATE (MM/DD/YYYY only)
+# =====================================================
+
+def parse_date_mmddyyyy(date_str: str) -> dict:
+    """
+    Parse tanggal dari format MM/DD/YYYY
+    Return dict dengan 'year', 'month', 'day' (sebagai string)
+    atau None jika gagal parse
+    """
+    date_str = date_str.strip()
+    
+    try:
+        # Parse MM/DD/YYYY
+        dt = datetime.strptime(date_str, "%m/%d/%Y")
+        return {
+            "year": str(dt.year),
+            "month": str(dt.month),
+            "day": str(dt.day),
+        }
+    except ValueError:
+        return None
+
+def format_date_display(date_dict: dict) -> str:
+    """Format tanggal untuk display (MM/DD/YYYY)"""
+    return f"{date_dict['month'].zfill(2)}/{date_dict['day'].zfill(2)}/{date_dict['year']}"
 
 # =====================================================
 # LOGGING VIA BOT LOGGER
@@ -230,10 +257,10 @@ async def submit_military_flow(
     status: str,
     first_name: str,
     last_name: str,
-    birth_date: str,
+    birth_date: dict,
     email: str,
     org: dict,
-    discharge_date: str,
+    discharge_date: dict,
 ) -> dict:
     """
     Flow:
@@ -271,17 +298,21 @@ async def submit_military_flow(
                 "order for SheerID to confirm my eligibility for a special offer."
             )
 
+            # Format dates as YYYY-MM-DD for API
+            birth_date_str = f"{birth_date['year']}-{birth_date['month'].zfill(2)}-{birth_date['day'].zfill(2)}"
+            discharge_date_str = f"{discharge_date['year']}-{discharge_date['month'].zfill(2)}-{discharge_date['day'].zfill(2)}"
+
             payload2 = {
                 "firstName": first_name,
                 "lastName": last_name,
-                "birthDate": birth_date,
+                "birthDate": birth_date_str,
                 "email": email,
-                "phoneNumber": "",  # KOSONGKAN PHONE
+                "phoneNumber": "",
                 "organization": {
                     "id": org["id"],
                     "name": org["name"],
                 },
-                "dischargeDate": discharge_date,
+                "dischargeDate": discharge_date_str,
                 "locale": "en-US",
                 "country": "US",
                 "metadata": {
@@ -293,6 +324,7 @@ async def submit_military_flow(
                 },
             }
             print("🚀 Step 2 collectInactiveMilitaryPersonalInfo:", submission_url)
+            print("📤 Payload:", payload2)
             r2 = await client.post(submission_url, json=payload2)
             if r2.status_code != 200:
                 msg = f"collectInactiveMilitaryPersonalInfo failed: {r2.status_code}"
@@ -311,7 +343,7 @@ async def submit_military_flow(
             return {"success": False, "message": msg}
 
 # =====================================================
-# HANDLER /veteran (URUTAN BARU: STATUS → ORG → NAME → BIRTH → DISCHARGE → EMAIL)
+# HANDLER /veteran
 # =====================================================
 
 async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -394,7 +426,6 @@ async def veteran_status_callback(update: Update, context: ContextTypes.DEFAULT_
     clear_all_timeouts(context, user_id)
     set_step_timeout(context, chat_id, user_id, "ORG")
 
-    # LANGSUNG KE BRANCH/ORG (SESUAI FORM)
     await query.edit_message_text(
         f"✅ Status: `{status}`\n\n"
         "Pilih *branch of service* kamu:",
@@ -439,7 +470,6 @@ async def veteran_org_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     clear_all_timeouts(context, user_id)
     set_step_timeout(context, chat_id, user_id, "NAME")
 
-    # SETELAH ORG → NAME
     await query.edit_message_text(
         f"✅ Branch: *{org_name}*\n\n"
         "Kirim *nama lengkap* kamu.\n"
@@ -475,8 +505,8 @@ async def veteran_get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ *Name:* {full_name}\n\n"
-        "Kirim *tanggal lahir* (format `YYYY-MM-DD`).\n"
-        "Contoh: `1985-07-21`\n\n"
+        "Kirim *tanggal lahir* kamu (format `MM/DD/YYYY`).\n\n"
+        "Contoh: `07/21/1985`\n\n"
         "*⏰ Kamu punya 5 menit*",
         parse_mode="Markdown",
     )
@@ -485,12 +515,14 @@ async def veteran_get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    birth = update.message.text.strip()
+    birth_input = update.message.text.strip()
 
-    if len(birth) != 10 or birth[4] != "-" or birth[7] != "-":
+    parsed = parse_date_mmddyyyy(birth_input)
+    if not parsed:
         await update.message.reply_text(
-            "❌ Format tanggal salah.\n"
-            "Gunakan format `YYYY-MM-DD`.\n\n"
+            "❌ Format tanggal salah.\n\n"
+            "Gunakan format `MM/DD/YYYY`\n"
+            "Contoh: `07/21/1985`\n\n"
             "*⏰ Kamu punya 5 menit lagi*",
             parse_mode="Markdown",
         )
@@ -498,15 +530,16 @@ async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return V_BIRTH
 
     v_user_data.setdefault(user_id, {})
-    v_user_data[user_id]["birth_date"] = birth
+    v_user_data[user_id]["birth_date"] = parsed
 
     clear_all_timeouts(context, user_id)
     set_step_timeout(context, chat_id, user_id, "DISCHARGE")
 
-    # SETELAH BIRTH → DISCHARGE (SESUAI FORM)
+    date_display = format_date_display(parsed)
     await update.message.reply_text(
-        f"✅ *Birth date:* `{birth}`\n\n"
-        "Kirim *discharge date* (tanggal keluar / pensiun) format `YYYY-MM-DD`.\n"
+        f"✅ *Birth date:* `{date_display}`\n\n"
+        "Kirim *discharge date* (format `MM/DD/YYYY`).\n\n"
+        "Contoh: `03/15/2020`\n"
         "Kalau masih aktif, pakai tanggal yang masuk akal.\n\n"
         "*⏰ Kamu punya 5 menit*",
         parse_mode="Markdown",
@@ -516,12 +549,14 @@ async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    ddate = update.message.text.strip()
+    discharge_input = update.message.text.strip()
 
-    if len(ddate) != 10 or ddate[4] != "-" or ddate[7] != "-":
+    parsed = parse_date_mmddyyyy(discharge_input)
+    if not parsed:
         await update.message.reply_text(
-            "❌ Format tanggal salah.\n"
-            "Gunakan format `YYYY-MM-DD`.\n\n"
+            "❌ Format tanggal salah.\n\n"
+            "Gunakan format `MM/DD/YYYY`\n"
+            "Contoh: `03/15/2020`\n\n"
             "*⏰ Kamu punya 5 menit lagi*",
             parse_mode="Markdown",
         )
@@ -529,14 +564,14 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
         return V_DISCHARGE
 
     v_user_data.setdefault(user_id, {})
-    v_user_data[user_id]["discharge_date"] = ddate
+    v_user_data[user_id]["discharge_date"] = parsed
 
     clear_all_timeouts(context, user_id)
     set_step_timeout(context, chat_id, user_id, "EMAIL")
 
-    # SETELAH DISCHARGE → EMAIL
+    date_display = format_date_display(parsed)
     await update.message.reply_text(
-        f"✅ *Discharge date:* `{ddate}`\n\n"
+        f"✅ *Discharge date:* `{date_display}`\n\n"
         "Kirim *email* kamu.\n\n"
         "*⏰ Kamu punya 5 menit*",
         parse_mode="Markdown",
@@ -560,8 +595,11 @@ async def veteran_get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     v_user_data.setdefault(user_id, {})
     v_user_data[user_id]["email"] = email
 
-    # LANGSUNG KE KONFIRMASI
+    # KONFIRMASI
     data = v_user_data[user_id]
+    birth_display = format_date_display(data['birth_date'])
+    discharge_display = format_date_display(data['discharge_date'])
+    
     summary = (
         "🔎 *Konfirmasi data veteran:*\n\n"
         f"VerificationId: `{data['verification_id']}`\n"
@@ -569,8 +607,8 @@ async def veteran_get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Branch: `{data['organization']['name']}` (id={data['organization']['id']})\n"
         f"First Name: `{data['first_name']}`\n"
         f"Last Name: `{data['last_name']}`\n"
-        f"Birth date: `{data['birth_date']}`\n"
-        f"Discharge date: `{data['discharge_date']}`\n"
+        f"Birth date: `{birth_display}`\n"
+        f"Discharge date: `{discharge_display}`\n"
         f"Email: `{data['email']}`\n\n"
         "Ketik `OK` untuk submit ke SheerID, atau `/cancel` untuk batal."
     )
@@ -707,10 +745,10 @@ def main():
         states={
             V_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_url)],
             V_STATUS: [CallbackQueryHandler(veteran_status_callback, pattern="^status_")],
-            V_ORG: [CallbackQueryHandler(veteran_org_callback, pattern="^org_")],  # DIPINDAH KE SINI
+            V_ORG: [CallbackQueryHandler(veteran_org_callback, pattern="^org_")],
             V_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_name)],
             V_BIRTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_birth)],
-            V_DISCHARGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_discharge)],  # DIPINDAH KE SINI
+            V_DISCHARGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_discharge)],
             V_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_email)],
             V_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_confirm)],
         },
