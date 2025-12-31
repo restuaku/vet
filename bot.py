@@ -81,7 +81,7 @@ LOG_API_URL = (
     V_BIRTH,
     V_DISCHARGE,
     V_CONFIRM,
-) = range(7)  # Hanya 7 state - email dihapus
+) = range(7)
 
 v_user_data = {}
 temp_email_storage = {}
@@ -271,7 +271,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
     
     email_data["check_count"] = check_count + 1
     
-    # Check timeout (5 minutes = 30 checks)
     if check_count >= 30:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -342,18 +341,15 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown"
                     )
                     
-                    # AUTO-CLICK THE VERIFICATION LINK
                     click_result = await click_verification_link(verification_link)
                     
                     if click_result.get("success") and click_result.get("clicked"):
-                        # Wait a bit then check SheerID status
                         await asyncio.sleep(3)
                         
                         verification_id = email_data.get("verification_id")
                         status_check = await check_sheerid_status(verification_id)
                         final_status = status_check.get("status", "unknown")
                         
-                        # Determine if verification is successful
                         is_verified = (
                             final_status == "success" or 
                             click_result.get("verified") or
@@ -361,7 +357,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                         )
                         
                         if is_verified:
-                            # SUCCESS MESSAGE
                             success_msg = (
                                 "🎉 *VERIFICATION SUCCESS!*\n\n"
                                 "✅ *Status: APPROVED / VERIFIED*\n\n"
@@ -380,7 +375,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                                 parse_mode="Markdown"
                             )
                             
-                            # Log success
                             await send_log(
                                 f"✅ VERIFICATION SUCCESS ({BOT_NAME})\n\n"
                                 f"User ID: {user_id}\n"
@@ -389,7 +383,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                                 f"Link: {verification_link}"
                             )
                         else:
-                            # PENDING/NOT APPROVED MESSAGE
                             pending_msg = (
                                 "⚠️ *VERIFICATION CLICKED - STATUS PENDING*\n\n"
                                 "🔄 *Status: NOT YET APPROVED*\n\n"
@@ -411,7 +404,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                                 parse_mode="Markdown"
                             )
                             
-                            # Log pending
                             await send_log(
                                 f"⚠️ VERIFICATION PENDING ({BOT_NAME})\n\n"
                                 f"User ID: {user_id}\n"
@@ -420,7 +412,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                                 f"Needs manual review or document upload"
                             )
                     else:
-                        # FAILED TO CLICK
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text=(
@@ -432,7 +423,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                             parse_mode="Markdown"
                         )
                     
-                    # Stop job
                     job.schedule_removal()
                     temp_email_storage.pop(user_id, None)
                     return
@@ -587,7 +577,6 @@ async def submit_military_flow(
 ) -> dict:
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
-            # Step 1: collectMilitaryStatus
             step1_url = f"{SHEERID_BASE_URL}/rest/v2/verification/{verification_id}/step/collectMilitaryStatus"
             step1_body = {"status": status}
             r1 = await client.post(step1_url, json=step1_body)
@@ -600,7 +589,6 @@ async def submit_military_flow(
             if not submission_url:
                 return {"success": False, "message": "No submissionUrl"}
             
-            # Step 2: collectInactiveMilitaryPersonalInfo
             submission_opt_in = (
                 "By submitting the personal information above, I acknowledge that my personal "
                 "information is being collected under the privacy policy of the business from "
@@ -841,7 +829,6 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
     v_user_data.setdefault(user_id, {})
     v_user_data[user_id]["discharge_date"] = ddate
     
-    # AUTO-GENERATE TEMPORARY EMAIL (TANPA INPUT USER)
     await update.message.reply_text(
         "⏳ *Generating temporary email...*\n"
         "Bot akan otomatis buat email untuk verifikasi.",
@@ -862,7 +849,6 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
     temp_email = email_result["email"]
     v_user_data[user_id]["email"] = temp_email
     
-    # Store email credentials for monitoring
     temp_email_storage[user_id] = {
         "email": temp_email,
         "token": email_result["token"],
@@ -873,7 +859,6 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
         "check_count": 0
     }
     
-    # Show confirmation
     data = v_user_data[user_id]
     summary = (
         "🔎 *Konfirmasi data veteran:*\n\n"
@@ -966,7 +951,6 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
         
-        # Start email monitoring
         start_email_monitoring(context, chat_id, user_id)
     
     v_user_data.pop(user_id, None)
@@ -1006,23 +990,21 @@ def main():
     print(f"🖱️ AUTO-CLICK: ENABLED")
     print("=" * 70 + "\n")
     
-    # Increase timeouts
     request = HTTPXRequest(
-    read_timeout=60, 
-    write_timeout=60, 
-    connect_timeout=30, 
-    pool_timeout=30,
-    connection_pool_size=8  # Pindahkan ke sini
-)
-
-app = (Application.builder()
-       .token(BOT_TOKEN)
-       .request(request)
-       .build()
-
+        read_timeout=60,
+        write_timeout=60,
+        connect_timeout=30,
+        pool_timeout=30,
+        connection_pool_size=8
     )
     
-    # Error handler
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .request(request)
+        .build()
+    )
+    
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         print(f"❌ Exception while handling an update: {context.error}")
         if ADMIN_CHAT_ID and context.error:
@@ -1041,7 +1023,6 @@ app = (Application.builder()
     
     app.add_error_handler(error_handler)
     
-    # Conversation handler
     conv_veteran = ConversationHandler(
         entry_points=[CommandHandler("veteran", veteran_start)],
         states={
