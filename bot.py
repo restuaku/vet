@@ -1,6 +1,7 @@
 import os
 import re
 import random
+import asyncio
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -70,7 +71,7 @@ LOG_API_URL = (
 )
 
 # =====================================================
-# STATE CONVERSATION
+# STATE CONVERSATION (TANPA V_EMAIL - OTOMATIS)
 # =====================================================
 (
     V_URL,
@@ -79,9 +80,8 @@ LOG_API_URL = (
     V_NAME,
     V_BIRTH,
     V_DISCHARGE,
-    V_EMAIL,
     V_CONFIRM,
-) = range(8)
+) = range(7)  # Hanya 7 state - email dihapus
 
 v_user_data = {}
 temp_email_storage = {}
@@ -175,7 +175,6 @@ async def get_message_content(token: str, message_id: str) -> dict:
 
 def extract_verification_link(text: str) -> str:
     """Extract complete SheerID verification link from email"""
-    # Pattern untuk full verification link dengan emailToken
     patterns = [
         r'(https://services\.sheerid\.com/verify/[^\s\)]+\?[^\s\)]*emailToken=[^\s\)]+)',
         r'(https://services\.sheerid\.com/verify/[^\s\)]+)',
@@ -185,7 +184,6 @@ def extract_verification_link(text: str) -> str:
         match = re.search(pattern, text)
         if match:
             link = match.group(1)
-            # Clean up potential HTML entities or trailing characters
             link = re.sub(r'[<>"\'\)]$', '', link)
             print(f"🔗 Extracted link: {link}")
             return link
@@ -195,7 +193,6 @@ def extract_verification_link(text: str) -> str:
 async def click_verification_link(verification_url: str) -> dict:
     """Auto-click verification link dengan httpx (simulating browser)"""
     try:
-        # Headers to simulate real browser
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -210,28 +207,25 @@ async def click_verification_link(verification_url: str) -> dict:
         
         async with httpx.AsyncClient(
             timeout=30.0,
-            follow_redirects=True,  # Follow redirects automatically
+            follow_redirects=True,
             headers=headers
         ) as client:
             print(f"🖱️ Clicking verification link: {verification_url}")
-            
-            # GET request to verification URL (simulating click)
             response = await client.get(verification_url)
             
             print(f"📊 Response status: {response.status_code}")
             print(f"📍 Final URL after redirects: {response.url}")
             
-            # Check if verification was successful
             if response.status_code == 200:
                 response_text = response.text.lower()
                 
-                # Check for success indicators in response
                 success_indicators = [
                     'verified',
                     'success',
                     'confirmed',
                     'thank you',
                     'complete',
+                    'approved'
                 ]
                 
                 is_success = any(indicator in response_text for indicator in success_indicators)
@@ -284,8 +278,13 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
             text=(
                 "⏰ *Email monitoring timeout*\n\n"
                 "Tidak ada email verifikasi masuk dalam 5 menit.\n"
-                f"📧 Email: `{email_data.get('email')}`\n\n"
-                "Coba lagi nanti dengan /veteran"
+                f"📧 Email yang digunakan: `{email_data.get('email')}`\n\n"
+                "❌ *Verification FAILED*\n\n"
+                "Kemungkinan:\n"
+                "• Data tidak valid\n"
+                "• SheerID butuh document upload\n"
+                "• Email belum dikirim\n\n"
+                "Coba lagi dengan /veteran"
             ),
             parse_mode="Markdown"
         )
@@ -302,7 +301,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
         
         print(f"📬 Found {len(messages)} messages for user {user_id}")
         
-        # Look for SheerID email
         for msg in messages:
             subject = msg.get("subject", "")
             msg_from = msg.get("from", {}).get("address", "")
@@ -310,7 +308,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
             
             print(f"📨 Email from: {msg_from}, Subject: {subject}")
             
-            # Check if it's from SheerID
             if "sheerid" in msg_from.lower() or "verif" in subject.lower() or "finish" in subject.lower():
                 await context.bot.send_message(
                     chat_id=chat_id,
@@ -323,19 +320,13 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
                 
-                # Get full message content
                 full_msg = await get_message_content(token, msg_id)
-                
-                # Get HTML or text content
                 html_content = full_msg.get("html", [])
                 text_content = full_msg.get("text", "")
-                
-                # Combine all content
                 all_content = text_content
                 if html_content:
                     all_content += " ".join(html_content)
                 
-                # Extract verification link
                 verification_link = extract_verification_link(all_content)
                 
                 if verification_link:
@@ -345,8 +336,7 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                         chat_id=chat_id,
                         text=(
                             "🔗 *Verification link found!*\n\n"
-                            f"`{verification_link}`\n\n"
-                            "🖱️ Bot sedang AUTO-CLICK link ini...\n"
+                            "🖱️ Bot sedang AUTO-CLICK link verifikasi...\n"
                             "⏳ Tunggu sebentar..."
                         ),
                         parse_mode="Markdown"
@@ -356,50 +346,93 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                     click_result = await click_verification_link(verification_link)
                     
                     if click_result.get("success") and click_result.get("clicked"):
-                        # Check SheerID status after clicking
+                        # Wait a bit then check SheerID status
+                        await asyncio.sleep(3)
+                        
                         verification_id = email_data.get("verification_id")
                         status_check = await check_sheerid_status(verification_id)
                         final_status = status_check.get("status", "unknown")
                         
-                        success_msg = (
-                            "✅ *VERIFICATION LINK CLICKED!*\n\n"
-                            f"📊 HTTP Status: `{click_result.get('status_code')}`\n"
-                            f"🎯 SheerID Status: `{final_status}`\n"
-                            f"📧 Email: `{email_data.get('email')}`\n\n"
+                        # Determine if verification is successful
+                        is_verified = (
+                            final_status == "success" or 
+                            click_result.get("verified") or
+                            "success" in str(click_result.get("final_url", "")).lower()
                         )
                         
-                        if final_status == "success" or click_result.get("verified"):
-                            success_msg += "🎉 *STATUS: VERIFIED SUCCESS!*\n\nVerifikasi veteran kamu berhasil!"
+                        if is_verified:
+                            # SUCCESS MESSAGE
+                            success_msg = (
+                                "🎉 *VERIFICATION SUCCESS!*\n\n"
+                                "✅ *Status: APPROVED / VERIFIED*\n\n"
+                                f"📧 Email: `{email_data.get('email')}`\n"
+                                f"🎯 SheerID Status: `{final_status}`\n"
+                                f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
+                                "🔗 Final URL:\n"
+                                f"`{click_result.get('final_url', 'N/A')[:100]}...`\n\n"
+                                "✨ *Verifikasi veteran kamu berhasil!*\n"
+                                "Sekarang kamu bisa gunakan discount/offer."
+                            )
+                            
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=success_msg,
+                                parse_mode="Markdown"
+                            )
+                            
+                            # Log success
+                            await send_log(
+                                f"✅ VERIFICATION SUCCESS ({BOT_NAME})\n\n"
+                                f"User ID: {user_id}\n"
+                                f"Email: {email_data.get('email')}\n"
+                                f"Final Status: {final_status}\n"
+                                f"Link: {verification_link}"
+                            )
                         else:
-                            success_msg += "⚠️ Link diklik, tapi status masih `pending`.\nCek kembali dalam beberapa menit."
-                        
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text=success_msg,
-                            parse_mode="Markdown"
-                        )
-                        
-                        # Log success
-                        await send_log(
-                            f"✅ AUTO-CLICK SUCCESS ({BOT_NAME})\n\n"
-                            f"User ID: {user_id}\n"
-                            f"Email: {email_data.get('email')}\n"
-                            f"Final Status: {final_status}\n"
-                            f"Link: {verification_link}"
-                        )
+                            # PENDING/NOT APPROVED MESSAGE
+                            pending_msg = (
+                                "⚠️ *VERIFICATION CLICKED - STATUS PENDING*\n\n"
+                                "🔄 *Status: NOT YET APPROVED*\n\n"
+                                f"📧 Email: `{email_data.get('email')}`\n"
+                                f"🎯 SheerID Status: `{final_status}`\n"
+                                f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
+                                "📋 *Kemungkinan penyebab:*\n"
+                                "• SheerID membutuhkan document upload (DD214, Military ID)\n"
+                                "• Manual review diperlukan\n"
+                                "• Data tidak cocok dengan database\n\n"
+                                "💡 *Next steps:*\n"
+                                "Cek browser di link SheerID original untuk lihat status lengkap.\n"
+                                "Mungkin perlu upload dokumen."
+                            )
+                            
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=pending_msg,
+                                parse_mode="Markdown"
+                            )
+                            
+                            # Log pending
+                            await send_log(
+                                f"⚠️ VERIFICATION PENDING ({BOT_NAME})\n\n"
+                                f"User ID: {user_id}\n"
+                                f"Email: {email_data.get('email')}\n"
+                                f"Final Status: {final_status}\n"
+                                f"Needs manual review or document upload"
+                            )
                     else:
+                        # FAILED TO CLICK
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text=(
-                                "❌ *Gagal auto-click verification link*\n\n"
+                                "❌ *AUTO-CLICK FAILED*\n\n"
                                 f"Error: {click_result.get('message', 'Unknown error')}\n\n"
-                                f"Link: `{verification_link}`\n\n"
-                                "Coba klik manual link di atas."
+                                f"🔗 Link: `{verification_link[:100]}...`\n\n"
+                                "Coba klik manual link di atas atau /veteran untuk restart."
                             ),
                             parse_mode="Markdown"
                         )
                     
-                    # Stop job - verification attempt completed
+                    # Stop job
                     job.schedule_removal()
                     temp_email_storage.pop(user_id, None)
                     return
@@ -408,11 +441,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
     
     except Exception as e:
         print(f"❌ Error in monitor_email_job: {e}")
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"❌ Error monitoring email: {str(e)}",
-            parse_mode="Markdown"
-        )
 
 def start_email_monitoring(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
     """Start background job to monitor email"""
@@ -421,13 +449,10 @@ def start_email_monitoring(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
         return
     
     job_name = f"email_monitor_{user_id}"
-    
-    # Remove existing job
     current_jobs = context.job_queue.get_jobs_by_name(job_name)
     for job in current_jobs:
         job.schedule_removal()
     
-    # Start new job
     context.job_queue.run_repeating(
         monitor_email_job,
         interval=EMAIL_CHECK_INTERVAL,
@@ -442,17 +467,22 @@ def start_email_monitoring(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
 # LOGGING FUNCTIONS
 # =====================================================
 async def send_log(text: str):
+    """Send log with retry logic"""
     if not LOG_BOT_TOKEN or ADMIN_CHAT_ID == 0 or not LOG_API_URL:
-        print("⚠️ LOG_BOT_TOKEN atau ADMIN_CHAT_ID belum diset, skip log")
         return
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            payload = {"chat_id": ADMIN_CHAT_ID, "text": text}
-            resp = await client.post(LOG_API_URL, json=payload)
-            if resp.status_code != 200:
-                print(f"❌ Log send failed: {resp.status_code}")
-    except Exception as e:
-        print(f"❌ Exception sending log: {e}")
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                payload = {"chat_id": ADMIN_CHAT_ID, "text": text}
+                resp = await client.post(LOG_API_URL, json=payload)
+                if resp.status_code == 200:
+                    return
+        except Exception as e:
+            print(f"❌ Log error (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2)
 
 async def log_user_start(update: Update, command_name: str):
     user = update.effective_user
@@ -525,7 +555,7 @@ def set_step_timeout(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: 
 def clear_all_timeouts(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     if context.job_queue is None:
         return
-    for step in ["URL", "STATUS", "ORG", "NAME", "BIRTH", "DISCHARGE", "EMAIL"]:
+    for step in ["URL", "STATUS", "ORG", "NAME", "BIRTH", "DISCHARGE"]:
         job_name = f"timeout_veteran_{step}_{user_id}"
         for job in context.job_queue.get_jobs_by_name(job_name):
             job.schedule_removal()
@@ -607,7 +637,7 @@ async def submit_military_flow(
             return {"success": False, "message": str(e)}
 
 # =====================================================
-# CONVERSATION HANDLERS (keeping the same structure)
+# CONVERSATION HANDLERS
 # =====================================================
 async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -620,10 +650,14 @@ async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "🎖 *Military / Veteran Verification Helper*\n\n"
-        "✨ *Fitur AUTO-CLICK verification email!*\n"
-        "Bot akan otomatis klik verification link dari email.\n\n"
+        "✨ *FULLY AUTOMATED BOT*\n"
+        "• Auto-generate temporary email\n"
+        "• Auto-click verification link\n"
+        "• Auto-report result (SUCCESS/PENDING/FAILED)\n\n"
         "Kirim SheerID verification URL militer kamu:\n\n"
         "`https://services.sheerid.com/verify/...verificationId=...`\n\n"
+        "Contoh:\n"
+        "`https://services.sheerid.com/verify/abcd...?verificationId=1234abcd...`\n\n"
         "*⏰ Kamu punya 5 menit untuk kirim link*",
         parse_mode="Markdown",
     )
@@ -807,9 +841,10 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
     v_user_data.setdefault(user_id, {})
     v_user_data[user_id]["discharge_date"] = ddate
     
-    # AUTO-GENERATE TEMPORARY EMAIL
+    # AUTO-GENERATE TEMPORARY EMAIL (TANPA INPUT USER)
     await update.message.reply_text(
-        "⏳ Generating temporary email address...",
+        "⏳ *Generating temporary email...*\n"
+        "Bot akan otomatis buat email untuk verifikasi.",
         parse_mode="Markdown"
     )
     
@@ -844,15 +879,18 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
         "🔎 *Konfirmasi data veteran:*\n\n"
         f"VerificationId: `{data['verification_id']}`\n"
         f"Status: `{data['status']}`\n"
-        f"Branch: `{data['organization']['name']}` (id={data['organization']['id']})\n"
-        f"First Name: `{data['first_name']}`\n"
-        f"Last Name: `{data['last_name']}`\n"
-        f"Birth date: `{data['birth_date']}`\n"
-        f"Discharge date: `{data['discharge_date']}`\n"
+        f"Branch: `{data['organization']['name']}`\n"
+        f"Name: `{data['first_name']} {data['last_name']}`\n"
+        f"Birth: `{data['birth_date']}`\n"
+        f"Discharge: `{data['discharge_date']}`\n"
         f"📧 Email (AUTO): `{temp_email}`\n\n"
         "✅ *Temporary email generated!*\n"
-        "🖱️ Bot akan otomatis CLICK verification link dari email.\n\n"
-        "Ketik `OK` untuk submit ke SheerID, atau `/cancel` untuk batal."
+        "🤖 Bot akan:\n"
+        "1️⃣ Submit data ke SheerID\n"
+        "2️⃣ Monitor email inbox\n"
+        "3️⃣ Auto-click verification link\n"
+        "4️⃣ Report result (SUCCESS/PENDING/FAILED)\n\n"
+        "Ketik `OK` untuk mulai, atau `/cancel` untuk batal."
     )
     
     clear_all_timeouts(context, user_id)
@@ -881,8 +919,8 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     verification_id = data["verification_id"]
     
     await update.message.reply_text(
-        "🚀 Mengirim data ke SheerID...\n"
-        "`collectMilitaryStatus` → `collectInactiveMilitaryPersonalInfo`",
+        "🚀 *Mengirim data ke SheerID...*\n"
+        "⏳ Mohon tunggu...",
         parse_mode="Markdown",
     )
     
@@ -918,13 +956,13 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(
-            "✅ *Military info submitted successfully!*\n\n"
-            f"📧 Temporary email: `{data['email']}`\n"
-            f"Current SheerID step: `{status}`\n\n"
-            "🔄 *Bot sekarang monitoring inbox...*\n"
-            "🖱️ Begitu email masuk, bot akan AUTO-CLICK verification link!\n\n"
-            "⏰ Monitoring timeout: 5 menit\n"
-            "💡 Tunggu notifikasi hasil verifikasi...",
+            "✅ *Data submitted successfully!*\n\n"
+            f"📧 Email: `{data['email']}`\n"
+            f"🎯 Current status: `{status}`\n\n"
+            "🔄 *Bot monitoring inbox...*\n"
+            "🖱️ Akan auto-click begitu email masuk!\n\n"
+            "⏰ Timeout: 5 menit\n"
+            "💡 Tunggu notifikasi hasil...",
             parse_mode="Markdown",
         )
         
@@ -968,15 +1006,47 @@ def main():
     print(f"🖱️ AUTO-CLICK: ENABLED")
     print("=" * 70 + "\n")
     
+    # Increase timeouts
     request = HTTPXRequest(
-        read_timeout=30,
-        write_timeout=30,
-        connect_timeout=10,
-        pool_timeout=10,
+        read_timeout=60,
+        write_timeout=60,
+        connect_timeout=30,
+        pool_timeout=30,
     )
     
-    app = Application.builder().token(BOT_TOKEN).request(request).build()
+    # Build application
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .request(request)
+        .connect_timeout(30)
+        .read_timeout(60)
+        .write_timeout(60)
+        .pool_timeout(30)
+        .connection_pool_size(8)
+        .build()
+    )
     
+    # Error handler
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        print(f"❌ Exception while handling an update: {context.error}")
+        if ADMIN_CHAT_ID and context.error:
+            try:
+                error_text = (
+                    f"⚠️ ERROR OCCURRED ({BOT_NAME})\n\n"
+                    f"Error: {str(context.error)[:500]}\n\n"
+                    f"Update: {str(update)[:300] if update else 'None'}"
+                )
+                await context.bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=error_text
+                )
+            except:
+                pass
+    
+    app.add_error_handler(error_handler)
+    
+    # Conversation handler
     conv_veteran = ConversationHandler(
         entry_points=[CommandHandler("veteran", veteran_start)],
         states={
@@ -991,12 +1061,25 @@ def main():
         fallbacks=[CommandHandler("cancel", veteran_cancel)],
         conversation_timeout=None,
         name="veteran_conv",
+        per_message=False,
     )
     
     app.add_handler(conv_veteran)
     
     print("🚀 Veteran bot with AUTO-CLICK is starting...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    print("⏳ Waiting for Telegram connection...")
+    
+    try:
+        app.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+            close_loop=False
+        )
+    except KeyboardInterrupt:
+        print("\n⚠️ Bot stopped by user")
+    except Exception as e:
+        print(f"\n❌ Fatal error: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
