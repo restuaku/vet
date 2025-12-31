@@ -1008,23 +1008,18 @@ def main():
     
     # Increase timeouts
     request = HTTPXRequest(
-        read_timeout=60,
-        write_timeout=60,
-        connect_timeout=30,
-        pool_timeout=30,
-    )
-    
-    # Build application
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .request(request)
-        .connect_timeout(30)
-        .read_timeout(60)
-        .write_timeout(60)
-        .pool_timeout(30)
-        .connection_pool_size(8)
-        .build()
+    read_timeout=60, 
+    write_timeout=60, 
+    connect_timeout=30, 
+    pool_timeout=30,
+    connection_pool_size=8  # Pindahkan ke sini
+)
+
+app = (Application.builder()
+       .token(BOT_TOKEN)
+       .request(request)
+       .build()
+
     )
     
     # Error handler
