@@ -1,13 +1,8 @@
 import os
-
 import re
-
 import random
-
 import asyncio
-
 from datetime import datetime
-
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -575,7 +570,7 @@ def clear_all_timeouts(context: ContextTypes.DEFAULT_TYPE, user_id: int):
             job.schedule_removal()
 
 # =====================================================
-# SHEERID HELPER FUNCTIONS (FIXED)
+# SHEERID HELPER FUNCTIONS - FIXED IKUT REFERENCE
 # =====================================================
 
 async def check_sheerid_status(verification_id: str) -> dict:
@@ -601,7 +596,9 @@ async def submit_military_flow(
     discharge_date: str,
 ) -> dict:
     """
-    FIXED: Submit military verification dengan endpoint yang benar
+    FIXED: Ikut persis reference script paste-2.txt
+    Pakai submissionUrl dari step 1 response
+    Format tanggal YYYY-MM-DD (bukan MM/DD/YYYY)
     """
     async with httpx.AsyncClient(timeout=15.0) as client:
         try:
@@ -609,8 +606,8 @@ async def submit_military_flow(
             step1_url = f"{SHEERID_BASE_URL}/rest/v2/verification/{verification_id}/step/collectMilitaryStatus"
             step1_body = {"status": status}
 
-            print(f"📤 Step 1: {step1_url}")
-            print(f"📦 Payload: {step1_body}")
+            print(f"📤 Step 1 URL: {step1_url}")
+            print(f"📦 Step 1 Payload: {step1_body}")
 
             r1 = await client.post(step1_url, json=step1_body)
 
@@ -623,27 +620,51 @@ async def submit_military_flow(
                     "message": f"collectMilitaryStatus failed: {r1.status_code} - {r1.text}"
                 }
 
-            # Step 2: Submit personal info dengan endpoint yang BENAR
-            # PERBAIKAN: Gunakan endpoint manual, bukan submissionUrl
-            step2_url = f"{SHEERID_BASE_URL}/rest/v2/verification/{verification_id}/step/collectInactiveMilitaryPersonalInfo"
+            d1 = r1.json()
 
-            # Payload minimal tanpa metadata yang membingungkan
+            # PENTING: Pakai submissionUrl dari response (seperti reference script)
+            submission_url = d1.get("submissionUrl")
+
+            if not submission_url:
+                return {"success": False, "message": "No submissionUrl in step 1 response"}
+
+            print(f"✅ Got submissionUrl: {submission_url}")
+
+            # Step 2: Submit personal info KE submissionUrl
+            # Payload sesuai reference (dengan metadata)
+            submission_opt_in = (
+                "By submitting the personal information above, I acknowledge that my personal "
+                "information is being collected under the privacy policy of the business from "
+                "which I am seeking a discount, and I understand that my personal information "
+                "will be shared with SheerID as a processor/third-party service provider in "
+                "order for SheerID to confirm my eligibility for a special offer."
+            )
+
             payload2 = {
                 "firstName": first_name,
                 "lastName": last_name,
-                "birthDate": birth_date,
+                "birthDate": birth_date,  # Format YYYY-MM-DD
                 "email": email,
+                "phoneNumber": "",
                 "organization": {
                     "id": org["id"],
                     "name": org["name"]
                 },
-                "dischargeDate": discharge_date
+                "dischargeDate": discharge_date,  # Format YYYY-MM-DD
+                "locale": "en-US",
+                "country": "US",
+                "metadata": {
+                    "marketConsentValue": False,
+                    "refererUrl": "",
+                    "verificationId": verification_id,
+                    "submissionOptIn": submission_opt_in,
+                },
             }
 
-            print(f"📤 Step 2: {step2_url}")
-            print(f"📦 Payload: {payload2}")
+            print(f"📤 Step 2 URL (submissionUrl): {submission_url}")
+            print(f"📦 Step 2 Payload: {payload2}")
 
-            r2 = await client.post(step2_url, json=payload2)
+            r2 = await client.post(submission_url, json=payload2)
 
             print(f"📥 Step 2 Response: {r2.status_code}")
             print(f"📥 Step 2 Body: {r2.text[:500]}")
@@ -685,7 +706,7 @@ async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`https://services.sheerid.com/verify/...?verificationId=...`\n\n"
         "Contoh:\n"
         "`https://services.sheerid.com/verify/abcd/?verificationId=1234`\n\n"
-        "📅 *Note: Format tanggal US (MM/DD/YYYY)*\n\n"
+        "📅 *Note: Format tanggal YYYY-MM-DD*\n\n"
         "*⏰ Kamu punya 5 menit*",
         parse_mode="Markdown",
     )
@@ -815,8 +836,8 @@ async def veteran_get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ *Name:* {full_name}\n\n"
-        "Kirim *tanggal lahir* (format `MM/DD/YYYY`).\n"
-        "Contoh: `07/21/1985`\n\n"
+        "Kirim *tanggal lahir* (format `YYYY-MM-DD`).\n"
+        "Contoh: `1985-07-21`\n\n"
         "*⏰ Kamu punya 5 menit*",
         parse_mode="Markdown",
     )
@@ -827,11 +848,12 @@ async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     birth = update.message.text.strip()
 
-    if len(birth) != 10 or birth[2] != "/" or birth[5] != "/":
+    # Format YYYY-MM-DD
+    if len(birth) != 10 or birth[4] != "-" or birth[7] != "-":
         await update.message.reply_text(
             "❌ Format tanggal salah.\n"
-            "Gunakan format `MM/DD/YYYY`.\n"
-            "Contoh: `07/21/1985`\n\n"
+            "Gunakan format `YYYY-MM-DD`.\n"
+            "Contoh: `1985-07-21`\n\n"
             "*⏰ Kamu punya 5 menit lagi*",
             parse_mode="Markdown",
         )
@@ -839,22 +861,22 @@ async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return V_BIRTH
 
     try:
-        parts = birth.split("/")
-        month = int(parts[0])
-        day = int(parts[1])
-        year = int(parts[2])
+        parts = birth.split("-")
+        year = int(parts[0])
+        month = int(parts[1])
+        day = int(parts[2])
 
+        if not (1900 <= year <= 2010):
+            raise ValueError("Invalid year")
         if not (1 <= month <= 12):
             raise ValueError("Invalid month")
         if not (1 <= day <= 31):
             raise ValueError("Invalid day")
-        if not (1900 <= year <= 2010):
-            raise ValueError("Invalid year")
     except ValueError:
         await update.message.reply_text(
             "❌ Tanggal tidak valid.\n"
-            "Gunakan format `MM/DD/YYYY`.\n"
-            "Contoh: `07/21/1985`\n\n"
+            "Gunakan format `YYYY-MM-DD`.\n"
+            "Contoh: `1985-07-21`\n\n"
             "*⏰ Kamu punya 5 menit lagi*",
             parse_mode="Markdown",
         )
@@ -869,8 +891,8 @@ async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ *Birth date:* `{birth}`\n\n"
-        "Kirim *discharge date* (format `MM/DD/YYYY`).\n"
-        "Contoh: `12/15/2020`\n"
+        "Kirim *discharge date* (format `YYYY-MM-DD`).\n"
+        "Contoh: `2020-12-15`\n"
         "Kalau masih aktif, pakai tanggal masuk akal.\n\n"
         "*⏰ Kamu punya 5 menit*",
         parse_mode="Markdown",
@@ -882,11 +904,12 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
     chat_id = update.effective_chat.id
     ddate = update.message.text.strip()
 
-    if len(ddate) != 10 or ddate[2] != "/" or ddate[5] != "/":
+    # Format YYYY-MM-DD
+    if len(ddate) != 10 or ddate[4] != "-" or ddate[7] != "-":
         await update.message.reply_text(
             "❌ Format tanggal salah.\n"
-            "Gunakan format `MM/DD/YYYY`.\n"
-            "Contoh: `12/15/2020`\n\n"
+            "Gunakan format `YYYY-MM-DD`.\n"
+            "Contoh: `2020-12-15`\n\n"
             "*⏰ Kamu punya 5 menit lagi*",
             parse_mode="Markdown",
         )
@@ -894,22 +917,22 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
         return V_DISCHARGE
 
     try:
-        parts = ddate.split("/")
-        month = int(parts[0])
-        day = int(parts[1])
-        year = int(parts[2])
+        parts = ddate.split("-")
+        year = int(parts[0])
+        month = int(parts[1])
+        day = int(parts[2])
 
+        if not (1950 <= year <= 2026):
+            raise ValueError("Invalid year")
         if not (1 <= month <= 12):
             raise ValueError("Invalid month")
         if not (1 <= day <= 31):
             raise ValueError("Invalid day")
-        if not (1950 <= year <= 2026):
-            raise ValueError("Invalid year")
     except ValueError:
         await update.message.reply_text(
             "❌ Tanggal tidak valid.\n"
-            "Gunakan format `MM/DD/YYYY`.\n"
-            "Contoh: `12/15/2020`\n\n"
+            "Gunakan format `YYYY-MM-DD`.\n"
+            "Contoh: `2020-12-15`\n\n"
             "*⏰ Kamu punya 5 menit lagi*",
             parse_mode="Markdown",
         )
@@ -1071,7 +1094,7 @@ def main():
         return
 
     print("\n" + "=" * 70)
-    print(f"🎖 {BOT_NAME} - Veteran Bot with Custom Tempmail (FIXED)")
+    print(f"🎖 {BOT_NAME} - Veteran Bot FIXED (Ikut Reference)")
     print("=" * 70)
     print(f"🤖 Bot Token: {BOT_TOKEN[:10]}...{BOT_TOKEN[-5:]}")
     print(f"👮 Admin Chat ID: {ADMIN_CHAT_ID}")
@@ -1082,8 +1105,8 @@ def main():
     print(f"📬 Email check interval: {EMAIL_CHECK_INTERVAL}s")
     print(f"🖱️ AUTO-CLICK: ENABLED")
     print(f"🔧 HANDLE INCOMPLETE LINKS: ENABLED")
-    print(f"📅 DATE FORMAT: MM/DD/YYYY (US)")
-    print(f"✅ FIXED: collectInactiveMilitaryPersonalInfo endpoint")
+    print(f"📅 DATE FORMAT: YYYY-MM-DD (ISO)")
+    print(f"✅ FIXED: Pakai submissionUrl + format tanggal benar")
     print("=" * 70 + "\n")
 
     request = HTTPXRequest(
