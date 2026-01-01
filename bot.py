@@ -2,7 +2,7 @@ import os
 import re
 import random
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -36,8 +36,9 @@ STEP_TIMEOUT = 300
 EMAIL_CHECK_INTERVAL = 10
 EMAIL_CHECK_TIMEOUT = 300
 
-# Mail.tm API
-MAILTM_BASE_URL = "https://api.mail.tm"
+# Custom Tempmail Worker URL
+CUSTOM_MAIL_API = "https://bot-emails.pilarjalar.workers.dev"
+CUSTOM_DOMAIN = "zzzz.biz.id"
 
 # Military organizations
 MIL_ORGS = {
@@ -71,7 +72,7 @@ LOG_API_URL = (
 )
 
 # =====================================================
-# STATE CONVERSATION (TANPA V_EMAIL - OTOMATIS)
+# STATE CONVERSATION
 # =====================================================
 (
     V_URL,
@@ -87,84 +88,43 @@ v_user_data = {}
 temp_email_storage = {}
 
 # =====================================================
-# MAIL.TM API FUNCTIONS
+# CUSTOM TEMPMAIL API FUNCTIONS (KV Worker)
 # =====================================================
-async def get_available_domains() -> list:
-    """Get available domains from mail.tm"""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{MAILTM_BASE_URL}/domains")
-            if resp.status_code == 200:
-                data = resp.json()
-                return [item["domain"] for item in data.get("hydra:member", [])]
-            return []
-    except Exception as e:
-        print(f"❌ Error getting domains: {e}")
-        return []
-
 async def create_temp_email() -> dict:
-    """Create temporary email account on mail.tm"""
+    """Generate email dengan custom domain"""
     try:
-        domains = await get_available_domains()
-        if not domains:
-            return {"success": False, "message": "No available domains"}
-        
         username = f"veteran{random.randint(1000, 9999)}{random.randint(100, 999)}"
-        email = f"{username}@{domains[0]}"
-        password = f"Pass{random.randint(10000, 99999)}!Xyz"
+        email = f"{username}@{CUSTOM_DOMAIN}"
         
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            account_data = {"address": email, "password": password}
-            resp = await client.post(f"{MAILTM_BASE_URL}/accounts", json=account_data)
-            
-            if resp.status_code != 201:
-                return {"success": False, "message": f"Failed to create account: {resp.status_code}"}
-            
-            account_info = resp.json()
-            account_id = account_info.get("id")
-            
-            token_data = {"address": email, "password": password}
-            token_resp = await client.post(f"{MAILTM_BASE_URL}/token", json=token_data)
-            
-            if token_resp.status_code != 200:
-                return {"success": False, "message": "Failed to get token"}
-            
-            token_info = token_resp.json()
-            token = token_info.get("token")
-            
-            print(f"✅ Created temp email: {email}")
-            return {
-                "success": True,
-                "email": email,
-                "password": password,
-                "token": token,
-                "account_id": account_id
-            }
+        print(f"✅ Generated custom email: {email}")
+        return {
+            "success": True,
+            "email": email,
+            "token": email
+        }
     except Exception as e:
-        print(f"❌ Error creating temp email: {e}")
+        print(f"❌ Error generating email: {e}")
         return {"success": False, "message": str(e)}
 
-async def check_inbox(token: str) -> list:
-    """Check inbox for new messages"""
+async def check_inbox(email: str) -> list:
+    """Check inbox via custom worker"""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            headers = {"Authorization": f"Bearer {token}"}
-            resp = await client.get(f"{MAILTM_BASE_URL}/messages", headers=headers)
+            resp = await client.get(f"{CUSTOM_MAIL_API}/emails/{email}")
             
             if resp.status_code == 200:
                 data = resp.json()
-                return data.get("hydra:member", [])
+                return data.get("emails", [])
             return []
     except Exception as e:
         print(f"❌ Error checking inbox: {e}")
         return []
 
-async def get_message_content(token: str, message_id: str) -> dict:
+async def get_message_content(email: str, message_id: str) -> dict:
     """Get full message content"""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            headers = {"Authorization": f"Bearer {token}"}
-            resp = await client.get(f"{MAILTM_BASE_URL}/messages/{message_id}", headers=headers)
+            resp = await client.get(f"{CUSTOM_MAIL_API}/inbox/{message_id}")
             
             if resp.status_code == 200:
                 return resp.json()
@@ -172,6 +132,16 @@ async def get_message_content(token: str, message_id: str) -> dict:
     except Exception as e:
         print(f"❌ Error getting message: {e}")
         return {}
+
+async def delete_email_inbox(email: str) -> bool:
+    """Delete email inbox after verification done"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(f"{CUSTOM_MAIL_API}/emails/{email}")
+            return resp.status_code == 200
+    except Exception as e:
+        print(f"❌ Error deleting inbox: {e}")
+        return False
 
 def extract_verification_link(text: str) -> str:
     """Extract complete SheerID verification link from email"""
@@ -185,13 +155,37 @@ def extract_verification_link(text: str) -> str:
         if match:
             link = match.group(1)
             link = re.sub(r'[<>"\'\)]$', '', link)
-            print(f"🔗 Extracted link: {link}")
+            print(f"🔗 Extracted complete link: {link}")
             return link
     
     return None
 
+def extract_email_token_only(text: str) -> str:
+    """Extract emailToken parameter dari text email"""
+    match = re.search(r'emailToken=([A-Za-z0-9]+)', text, re.IGNORECASE)
+    if match:
+        token = match.group(1)
+        print(f"🎫 Extracted emailToken: {token}")
+        return token
+    
+    match = re.search(r'[?&]token=([A-Za-z0-9]+)', text, re.IGNORECASE)
+    if match:
+        token = match.group(1)
+        print(f"🎫 Extracted token (alternative): {token}")
+        return token
+    
+    return None
+
+def build_complete_verification_link(original_url: str, verification_id: str, email_token: str) -> str:
+    """Build complete verification link dari original URL + emailToken"""
+    base_url = original_url.split('?')[0]
+    complete_link = f"{base_url}?verificationId={verification_id}&emailToken={email_token}"
+    
+    print(f"🔧 Built complete link: {complete_link}")
+    return complete_link
+
 async def click_verification_link(verification_url: str) -> dict:
-    """Auto-click verification link dengan httpx (simulating browser)"""
+    """Auto-click verification link untuk konfirmasi"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -214,7 +208,7 @@ async def click_verification_link(verification_url: str) -> dict:
             response = await client.get(verification_url)
             
             print(f"📊 Response status: {response.status_code}")
-            print(f"📍 Final URL after redirects: {response.url}")
+            print(f"📍 Final URL: {response.url}")
             
             if response.status_code == 200:
                 response_text = response.text.lower()
@@ -247,16 +241,16 @@ async def click_verification_link(verification_url: str) -> dict:
                 }
     
     except httpx.TimeoutException:
-        return {"success": False, "clicked": False, "message": "Timeout clicking verification link"}
+        return {"success": False, "clicked": False, "message": "Timeout clicking link"}
     except Exception as e:
-        print(f"❌ Error clicking verification link: {e}")
+        print(f"❌ Error clicking link: {e}")
         return {"success": False, "clicked": False, "message": str(e)}
 
 # =====================================================
-# EMAIL MONITORING JOB - AUTO CLICK VERSION
+# EMAIL MONITORING JOB
 # =====================================================
 async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
-    """Background job to monitor temp email inbox and AUTO-CLICK verification link"""
+    """Monitor inbox dan auto-click verification link"""
     job = context.job
     user_id = job.user_id
     chat_id = job.chat_id
@@ -266,7 +260,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
         return
     
     email_data = temp_email_storage[user_id]
-    token = email_data.get("token")
     check_count = email_data.get("check_count", 0)
     
     email_data["check_count"] = check_count + 1
@@ -277,7 +270,7 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
             text=(
                 "⏰ *Email monitoring timeout*\n\n"
                 "Tidak ada email verifikasi masuk dalam 5 menit.\n"
-                f"📧 Email yang digunakan: `{email_data.get('email')}`\n\n"
+                f"📧 Email: `{email_data.get('email')}`\n\n"
                 "❌ *Verification FAILED*\n\n"
                 "Kemungkinan:\n"
                 "• Data tidak valid\n"
@@ -287,55 +280,96 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
             ),
             parse_mode="Markdown"
         )
+        
+        await delete_email_inbox(email_data.get("email"))
         job.schedule_removal()
         temp_email_storage.pop(user_id, None)
         return
     
     try:
-        messages = await check_inbox(token)
+        email = email_data.get("email")
+        messages = await check_inbox(email)
         
         if not messages:
-            print(f"📭 No messages yet for user {user_id} (check #{check_count})")
+            print(f"📭 No messages yet for {email} (check #{check_count})")
             return
         
-        print(f"📬 Found {len(messages)} messages for user {user_id}")
+        print(f"📬 Found {len(messages)} messages for {email}")
         
         for msg in messages:
+            msg_from = msg.get("from", "")
             subject = msg.get("subject", "")
-            msg_from = msg.get("from", {}).get("address", "")
             msg_id = msg.get("id")
             
-            print(f"📨 Email from: {msg_from}, Subject: {subject}")
+            print(f"📨 From: {msg_from}, Subject: {subject}")
             
-            if "sheerid" in msg_from.lower() or "verif" in subject.lower() or "finish" in subject.lower():
+            if "sheerid" in msg_from.lower() or "verif" in subject.lower():
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=(
                         "📧 *Email verifikasi diterima!*\n\n"
                         f"From: `{msg_from}`\n"
                         f"Subject: `{subject}`\n\n"
-                        "🔄 Mengambil verification link..."
+                        "🔄 Mengekstrak verification link..."
                     ),
                     parse_mode="Markdown"
                 )
                 
-                full_msg = await get_message_content(token, msg_id)
-                html_content = full_msg.get("html", [])
-                text_content = full_msg.get("text", "")
-                all_content = text_content
-                if html_content:
-                    all_content += " ".join(html_content)
+                full_msg = await get_message_content(email, msg_id)
+                body_text = full_msg.get("text", "")
                 
-                verification_link = extract_verification_link(all_content)
+                print(f"📄 Email body (first 300 chars): {body_text[:300]}")
+                
+                verification_link = extract_verification_link(body_text)
+                
+                if not verification_link or "emailToken=" not in verification_link:
+                    print("⚠️ Link tidak lengkap, ekstrak emailToken...")
+                    
+                    email_token = extract_email_token_only(body_text)
+                    
+                    if email_token:
+                        verification_id = email_data.get("verification_id")
+                        original_url = email_data.get("original_url")
+                        
+                        verification_link = build_complete_verification_link(
+                            original_url,
+                            verification_id,
+                            email_token
+                        )
+                        
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=(
+                                "🔧 *Link tidak lengkap di email!*\n\n"
+                                f"✅ emailToken ditemukan: `{email_token}`\n"
+                                "🔗 Building complete verification link...\n\n"
+                                f"`{verification_link[:80]}...`"
+                            ),
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=(
+                                "❌ *Gagal ekstrak emailToken*\n\n"
+                                "Email dari SheerID tidak mengandung token.\n"
+                                f"Body preview:\n`{body_text[:200]}`\n\n"
+                                "Coba manual atau /veteran untuk restart."
+                            ),
+                            parse_mode="Markdown"
+                        )
+                        
+                        await delete_email_inbox(email)
+                        job.schedule_removal()
+                        temp_email_storage.pop(user_id, None)
+                        return
                 
                 if verification_link:
-                    print(f"✅ Found verification link: {verification_link}")
-                    
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text=(
-                            "🔗 *Verification link found!*\n\n"
-                            "🖱️ Bot sedang AUTO-CLICK link verifikasi...\n"
+                            "🔗 *Verification link ready!*\n\n"
+                            "🖱️ Bot auto-clicking untuk konfirmasi...\n"
                             "⏳ Tunggu sebentar..."
                         ),
                         parse_mode="Markdown"
@@ -357,77 +391,69 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                         )
                         
                         if is_verified:
-                            success_msg = (
-                                "🎉 *VERIFICATION SUCCESS!*\n\n"
-                                "✅ *Status: APPROVED / VERIFIED*\n\n"
-                                f"📧 Email: `{email_data.get('email')}`\n"
-                                f"🎯 SheerID Status: `{final_status}`\n"
-                                f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
-                                "🔗 Final URL:\n"
-                                f"`{click_result.get('final_url', 'N/A')[:100]}...`\n\n"
-                                "✨ *Verifikasi veteran kamu berhasil!*\n"
-                                "Sekarang kamu bisa gunakan discount/offer."
-                            )
-                            
                             await context.bot.send_message(
                                 chat_id=chat_id,
-                                text=success_msg,
+                                text=(
+                                    "🎉 *VERIFICATION SUCCESS!*\n\n"
+                                    "✅ *Status: APPROVED / VERIFIED*\n\n"
+                                    f"📧 Email: `{email}`\n"
+                                    f"🎯 SheerID Status: `{final_status}`\n"
+                                    f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
+                                    "🔗 Final URL:\n"
+                                    f"`{click_result.get('final_url', 'N/A')[:100]}...`\n\n"
+                                    "✨ *Verifikasi veteran berhasil!*\n"
+                                    "Sekarang kamu bisa gunakan discount/offer."
+                                ),
                                 parse_mode="Markdown"
                             )
                             
                             await send_log(
                                 f"✅ VERIFICATION SUCCESS ({BOT_NAME})\n\n"
                                 f"User ID: {user_id}\n"
-                                f"Email: {email_data.get('email')}\n"
+                                f"Email: {email}\n"
                                 f"Final Status: {final_status}\n"
                                 f"Link: {verification_link}"
                             )
                         else:
-                            pending_msg = (
-                                "⚠️ *VERIFICATION CLICKED - STATUS PENDING*\n\n"
-                                "🔄 *Status: NOT YET APPROVED*\n\n"
-                                f"📧 Email: `{email_data.get('email')}`\n"
-                                f"🎯 SheerID Status: `{final_status}`\n"
-                                f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
-                                "📋 *Kemungkinan penyebab:*\n"
-                                "• SheerID membutuhkan document upload (DD214, Military ID)\n"
-                                "• Manual review diperlukan\n"
-                                "• Data tidak cocok dengan database\n\n"
-                                "💡 *Next steps:*\n"
-                                "Cek browser di link SheerID original untuk lihat status lengkap.\n"
-                                "Mungkin perlu upload dokumen."
-                            )
-                            
                             await context.bot.send_message(
                                 chat_id=chat_id,
-                                text=pending_msg,
+                                text=(
+                                    "⚠️ *VERIFICATION CLICKED - PENDING*\n\n"
+                                    "🔄 *Status: NOT YET APPROVED*\n\n"
+                                    f"📧 Email: `{email}`\n"
+                                    f"🎯 SheerID Status: `{final_status}`\n"
+                                    f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
+                                    "📋 *Kemungkinan:*\n"
+                                    "• SheerID butuh document upload (DD214)\n"
+                                    "• Manual review diperlukan\n"
+                                    "• Data tidak cocok database\n\n"
+                                    "💡 Cek browser untuk status lengkap."
+                                ),
                                 parse_mode="Markdown"
                             )
                             
                             await send_log(
                                 f"⚠️ VERIFICATION PENDING ({BOT_NAME})\n\n"
                                 f"User ID: {user_id}\n"
-                                f"Email: {email_data.get('email')}\n"
-                                f"Final Status: {final_status}\n"
-                                f"Needs manual review or document upload"
+                                f"Email: {email}\n"
+                                f"Final Status: {final_status}"
                             )
                     else:
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text=(
                                 "❌ *AUTO-CLICK FAILED*\n\n"
-                                f"Error: {click_result.get('message', 'Unknown error')}\n\n"
+                                f"Error: {click_result.get('message', 'Unknown')}\n\n"
                                 f"🔗 Link: `{verification_link[:100]}...`\n\n"
-                                "Coba klik manual link di atas atau /veteran untuk restart."
+                                "Coba klik manual atau /veteran restart."
                             ),
                             parse_mode="Markdown"
                         )
                     
+                    await delete_email_inbox(email)
                     job.schedule_removal()
                     temp_email_storage.pop(user_id, None)
                     return
-                else:
-                    print("⚠️ SheerID email found but no verification link extracted")
     
     except Exception as e:
         print(f"❌ Error in monitor_email_job: {e}")
@@ -457,7 +483,7 @@ def start_email_monitoring(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
 # LOGGING FUNCTIONS
 # =====================================================
 async def send_log(text: str):
-    """Send log with retry logic"""
+    """Send log to admin"""
     if not LOG_BOT_TOKEN or ADMIN_CHAT_ID == 0 or not LOG_API_URL:
         return
     
@@ -493,7 +519,7 @@ async def log_verification_result(user_id: int, full_name: str, email: str, stat
         f"ID: {user_id}\n"
         f"Name: {full_name}\n"
         f"Email: {email}\n"
-        f"SheerID currentStep: {status}\n"
+        f"SheerID Status: {status}\n"
     )
     if not success:
         text += f"\nError: {error_msg}"
@@ -517,12 +543,12 @@ async def step_timeout_job(context: ContextTypes.DEFAULT_TYPE):
             text=(
                 f"⏰ *Timeout di step {step_name}*\n\n"
                 "Kamu tidak merespon dalam 5 menit.\n"
-                "Silakan kirim /veteran untuk mengulang dari awal."
+                "Kirim /veteran untuk mengulang."
             ),
             parse_mode="Markdown",
         )
     except Exception as e:
-        print(f"❌ Failed to send timeout message: {e}")
+        print(f"❌ Failed to send timeout: {e}")
 
 def set_step_timeout(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, step: str):
     if context.job_queue is None:
@@ -640,13 +666,16 @@ async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎖 *Military / Veteran Verification Helper*\n\n"
         "✨ *FULLY AUTOMATED BOT*\n"
         "• Auto-generate temporary email\n"
-        "• Auto-click verification link\n"
-        "• Auto-report result (SUCCESS/PENDING/FAILED)\n\n"
-        "Kirim SheerID verification URL militer kamu:\n\n"
-        "`https://services.sheerid.com/verify/...verificationId=...`\n\n"
+        "• Auto-extract emailToken (handle incomplete links)\n"
+        "• Auto-build complete verification link\n"
+        "• Auto-click untuk konfirmasi\n"
+        "• Auto-report result\n\n"
+        "Kirim SheerID verification URL:\n\n"
+        "`https://services.sheerid.com/verify/...?verificationId=...`\n\n"
         "Contoh:\n"
-        "`https://services.sheerid.com/verify/abcd...?verificationId=1234abcd...`\n\n"
-        "*⏰ Kamu punya 5 menit untuk kirim link*",
+        "`https://services.sheerid.com/verify/abcd/?verificationId=1234`\n\n"
+        "📅 *Note: Format tanggal US (MM/DD/YYYY)*\n\n"
+        "*⏰ Kamu punya 5 menit*",
         parse_mode="Markdown",
     )
     return V_URL
@@ -660,7 +689,7 @@ async def veteran_get_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not match:
         await update.message.reply_text(
             "❌ *Invalid URL!*\n\n"
-            "Harus ada parameter `verificationId=...` di URL.\n\n"
+            "Harus ada parameter `verificationId=...`\n\n"
             "*⏰ Kamu punya 5 menit lagi*",
             parse_mode="Markdown",
         )
@@ -691,7 +720,7 @@ async def veteran_status_callback(update: Update, context: ContextTypes.DEFAULT_
     chat_id = query.message.chat_id
     
     if user_id not in v_user_data:
-        await query.edit_message_text("❌ *Session expired*\n\nSilakan kirim /veteran lagi.", parse_mode="Markdown")
+        await query.edit_message_text("❌ *Session expired*\n\nKirim /veteran lagi.", parse_mode="Markdown")
         return ConversationHandler.END
     
     data = query.data
@@ -707,7 +736,7 @@ async def veteran_status_callback(update: Update, context: ContextTypes.DEFAULT_
     
     await query.edit_message_text(
         f"✅ Status: `{status}`\n\n"
-        "Pilih *branch of service* kamu:",
+        "Pilih *branch of service*:",
         parse_mode="Markdown",
         reply_markup=ORG_KEYBOARD,
     )
@@ -720,7 +749,7 @@ async def veteran_org_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     chat_id = query.message.chat_id
     
     if user_id not in v_user_data:
-        await query.edit_message_text("❌ *Session expired*\n\nSilakan /veteran lagi.", parse_mode="Markdown")
+        await query.edit_message_text("❌ *Session expired*\n\nKirim /veteran lagi.", parse_mode="Markdown")
         return ConversationHandler.END
     
     data = query.data
@@ -774,8 +803,8 @@ async def veteran_get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"✅ *Name:* {full_name}\n\n"
-        "Kirim *tanggal lahir* (format `YYYY-MM-DD`).\n"
-        "Contoh: `1985-07-21`\n\n"
+        "Kirim *tanggal lahir* (format `MM/DD/YYYY`).\n"
+        "Contoh: `07/21/1985`\n\n"
         "*⏰ Kamu punya 5 menit*",
         parse_mode="Markdown",
     )
@@ -786,10 +815,35 @@ async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     birth = update.message.text.strip()
     
-    if len(birth) != 10 or birth[4] != "-" or birth[7] != "-":
+    if len(birth) != 10 or birth[2] != "/" or birth[5] != "/":
         await update.message.reply_text(
             "❌ Format tanggal salah.\n"
-            "Gunakan format `YYYY-MM-DD`.\n\n"
+            "Gunakan format `MM/DD/YYYY`.\n"
+            "Contoh: `07/21/1985`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
+        )
+        set_step_timeout(context, chat_id, user_id, "BIRTH")
+        return V_BIRTH
+    
+    try:
+        parts = birth.split("/")
+        month = int(parts[0])
+        day = int(parts[1])
+        year = int(parts[2])
+        
+        if not (1 <= month <= 12):
+            raise ValueError("Invalid month")
+        if not (1 <= day <= 31):
+            raise ValueError("Invalid day")
+        if not (1900 <= year <= 2010):
+            raise ValueError("Invalid year")
+            
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Tanggal tidak valid.\n"
+            "Gunakan format `MM/DD/YYYY`.\n"
+            "Contoh: `07/21/1985`\n\n"
             "*⏰ Kamu punya 5 menit lagi*",
             parse_mode="Markdown",
         )
@@ -804,8 +858,9 @@ async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"✅ *Birth date:* `{birth}`\n\n"
-        "Kirim *discharge date* (tanggal keluar / pensiun) format `YYYY-MM-DD`.\n"
-        "Kalau masih aktif, pakai tanggal yang masuk akal.\n\n"
+        "Kirim *discharge date* (format `MM/DD/YYYY`).\n"
+        "Contoh: `12/15/2020`\n"
+        "Kalau masih aktif, pakai tanggal masuk akal.\n\n"
         "*⏰ Kamu punya 5 menit*",
         parse_mode="Markdown",
     )
@@ -816,10 +871,35 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
     chat_id = update.effective_chat.id
     ddate = update.message.text.strip()
     
-    if len(ddate) != 10 or ddate[4] != "-" or ddate[7] != "-":
+    if len(ddate) != 10 or ddate[2] != "/" or ddate[5] != "/":
         await update.message.reply_text(
             "❌ Format tanggal salah.\n"
-            "Gunakan format `YYYY-MM-DD`.\n\n"
+            "Gunakan format `MM/DD/YYYY`.\n"
+            "Contoh: `12/15/2020`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
+        )
+        set_step_timeout(context, chat_id, user_id, "DISCHARGE")
+        return V_DISCHARGE
+    
+    try:
+        parts = ddate.split("/")
+        month = int(parts[0])
+        day = int(parts[1])
+        year = int(parts[2])
+        
+        if not (1 <= month <= 12):
+            raise ValueError("Invalid month")
+        if not (1 <= day <= 31):
+            raise ValueError("Invalid day")
+        if not (1950 <= year <= 2026):
+            raise ValueError("Invalid year")
+            
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Tanggal tidak valid.\n"
+            "Gunakan format `MM/DD/YYYY`.\n"
+            "Contoh: `12/15/2020`\n\n"
             "*⏰ Kamu punya 5 menit lagi*",
             parse_mode="Markdown",
         )
@@ -831,7 +911,7 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
     
     await update.message.reply_text(
         "⏳ *Generating temporary email...*\n"
-        "Bot akan otomatis buat email untuk verifikasi.",
+        "Bot akan auto-create email untuk verifikasi.",
         parse_mode="Markdown"
     )
     
@@ -839,9 +919,9 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
     
     if not email_result.get("success"):
         await update.message.reply_text(
-            "❌ *Failed to generate temporary email*\n\n"
+            "❌ *Failed to generate email*\n\n"
             f"Error: {email_result.get('message')}\n\n"
-            "Silakan coba lagi dengan /veteran",
+            "Coba lagi dengan /veteran",
             parse_mode="Markdown"
         )
         return ConversationHandler.END
@@ -852,8 +932,6 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
     temp_email_storage[user_id] = {
         "email": temp_email,
         "token": email_result["token"],
-        "account_id": email_result["account_id"],
-        "password": email_result["password"],
         "verification_id": v_user_data[user_id]["verification_id"],
         "original_url": v_user_data[user_id]["original_url"],
         "check_count": 0
@@ -873,8 +951,10 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
         "🤖 Bot akan:\n"
         "1️⃣ Submit data ke SheerID\n"
         "2️⃣ Monitor email inbox\n"
-        "3️⃣ Auto-click verification link\n"
-        "4️⃣ Report result (SUCCESS/PENDING/FAILED)\n\n"
+        "3️⃣ Ekstrak emailToken (handle incomplete link)\n"
+        "4️⃣ Build complete verification link\n"
+        "5️⃣ Auto-click untuk konfirmasi\n"
+        "6️⃣ Report result\n\n"
         "Ketik `OK` untuk mulai, atau `/cancel` untuk batal."
     )
     
@@ -891,13 +971,13 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if text != "ok":
         await update.message.reply_text(
-            "Ketik `OK` untuk lanjut submit atau `/cancel` untuk batal.",
+            "Ketik `OK` untuk lanjut atau `/cancel` untuk batal.",
             parse_mode="Markdown",
         )
         return V_CONFIRM
     
     if user_id not in v_user_data:
-        await update.message.reply_text("❌ Session hilang.\nSilakan /veteran lagi.", parse_mode="Markdown")
+        await update.message.reply_text("❌ Session hilang.\n\nKirim /veteran lagi.", parse_mode="Markdown")
         return ConversationHandler.END
     
     data = v_user_data[user_id]
@@ -936,7 +1016,7 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ *SUBMISSION FAILED*\n\n"
             f"Error: {result.get('message')}\n\n"
-            "Silakan coba lagi nanti atau /veteran untuk mulai ulang.",
+            "Coba lagi atau /veteran restart.",
             parse_mode="Markdown",
         )
     else:
@@ -945,7 +1025,8 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📧 Email: `{data['email']}`\n"
             f"🎯 Current status: `{status}`\n\n"
             "🔄 *Bot monitoring inbox...*\n"
-            "🖱️ Akan auto-click begitu email masuk!\n\n"
+            "🖱️ Akan auto-click begitu email masuk!\n"
+            "🔧 Handle incomplete links otomatis!\n\n"
             "⏰ Timeout: 5 menit\n"
             "💡 Tunggu notifikasi hasil...",
             parse_mode="Markdown",
@@ -980,14 +1061,18 @@ def main():
         return
     
     print("\n" + "=" * 70)
-    print(f"🎖 {BOT_NAME} - Veteran Flow with AUTO-CLICK")
+    print(f"🎖 {BOT_NAME} - Veteran Bot with Custom Tempmail")
     print("=" * 70)
     print(f"🤖 Bot Token: {BOT_TOKEN[:10]}...{BOT_TOKEN[-5:]}")
     print(f"👮 Admin Chat ID: {ADMIN_CHAT_ID}")
-    print(f"📨 LOG_BOT_TOKEN set: {bool(LOG_BOT_TOKEN)}")
-    print(f"⏰ Step timeout: {STEP_TIMEOUT} detik")
-    print(f"📧 Email check interval: {EMAIL_CHECK_INTERVAL} detik")
+    print(f"📨 LOG_BOT_TOKEN: {bool(LOG_BOT_TOKEN)}")
+    print(f"📧 Custom Tempmail API: {CUSTOM_MAIL_API}")
+    print(f"🌐 Custom Domain: {CUSTOM_DOMAIN}")
+    print(f"⏰ Step timeout: {STEP_TIMEOUT}s")
+    print(f"📬 Email check interval: {EMAIL_CHECK_INTERVAL}s")
     print(f"🖱️ AUTO-CLICK: ENABLED")
+    print(f"🔧 HANDLE INCOMPLETE LINKS: ENABLED")
+    print(f"📅 DATE FORMAT: MM/DD/YYYY (US)")
     print("=" * 70 + "\n")
     
     request = HTTPXRequest(
@@ -1006,11 +1091,11 @@ def main():
     )
     
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        print(f"❌ Exception while handling an update: {context.error}")
+        print(f"❌ Exception: {context.error}")
         if ADMIN_CHAT_ID and context.error:
             try:
                 error_text = (
-                    f"⚠️ ERROR OCCURRED ({BOT_NAME})\n\n"
+                    f"⚠️ ERROR ({BOT_NAME})\n\n"
                     f"Error: {str(context.error)[:500]}\n\n"
                     f"Update: {str(update)[:300] if update else 'None'}"
                 )
@@ -1042,8 +1127,8 @@ def main():
     
     app.add_handler(conv_veteran)
     
-    print("🚀 Veteran bot with AUTO-CLICK is starting...")
-    print("⏳ Waiting for Telegram connection...")
+    print("✅ Veteran bot starting...")
+    print("🔄 Waiting for Telegram connection...")
     
     try:
         app.run_polling(
@@ -1054,7 +1139,7 @@ def main():
     except KeyboardInterrupt:
         print("\n⚠️ Bot stopped by user")
     except Exception as e:
-        print(f"\n❌ Fatal error: {e}")
+        print(f"❌ Fatal error: {e}")
         raise
 
 if __name__ == "__main__":
