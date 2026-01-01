@@ -147,6 +147,10 @@ async def delete_email_inbox(email: str) -> bool:
         print(f"❌ Error deleting inbox: {e}")
         return False
 
+# =====================================================
+# EMAIL LINK EXTRACTION & VERIFICATION CLICK
+# =====================================================
+
 def extract_verification_link(text: str) -> str:
     """Extract complete SheerID verification link from email"""
     patterns = [
@@ -184,7 +188,10 @@ def build_complete_verification_link(original_url: str, verification_id: str, em
     return complete_link
 
 async def click_verification_link(verification_url: str) -> dict:
-    """Auto-click verification link untuk konfirmasi"""
+    """
+    DIPERBAIKI: Auto-click verification link dengan session persistence
+    dan deteksi status yang lebih akurat
+    """
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -196,58 +203,114 @@ async def click_verification_link(verification_url: str) -> dict:
             'Sec-Fetch-Dest': 'document',
             'Sec-Fetch-Mode': 'navigate',
             'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
         }
 
+        # Gunakan cookies untuk maintain session
+        cookies = httpx.Cookies()
+        
         async with httpx.AsyncClient(
             timeout=30.0,
             follow_redirects=True,
-            headers=headers
+            headers=headers,
+            cookies=cookies
         ) as client:
             print(f"🖱️ Clicking verification link: {verification_url}")
+            
+            # First request - initial click
             response = await client.get(verification_url)
             print(f"📊 Response status: {response.status_code}")
             print(f"📍 Final URL: {response.url}")
-
-            if response.status_code == 200:
-                response_text = response.text.lower()
-                success_indicators = [
-                    'verified',
-                    'success',
-                    'confirmed',
-                    'thank you',
-                    'complete',
-                    'approved'
-                ]
-
-                is_success = any(indicator in response_text for indicator in success_indicators)
-
-                return {
-                    "success": True,
-                    "clicked": True,
-                    "status_code": response.status_code,
-                    "final_url": str(response.url),
-                    "verified": is_success,
-                    "response_snippet": response_text[:500]
-                }
-            else:
+            
+            if response.status_code != 200:
                 return {
                     "success": False,
                     "clicked": True,
                     "status_code": response.status_code,
                     "message": f"Non-200 response: {response.status_code}"
                 }
+
+            response_text = response.text.lower()
+            final_url_str = str(response.url).lower()
+            
+            # PERBAIKAN: Deteksi status yang lebih detail
+            # Cek error/not approved indicators
+            not_approved_indicators = [
+                'not approved',
+                'not verified',
+                'could not verify',
+                'unable to verify',
+                'verification failed',
+                'not eligible',
+                'does not match',
+                'error',
+                'please try again'
+            ]
+            
+            # Cek success indicators
+            success_indicators = [
+                'verified successfully',
+                'verification complete',
+                'thank you for verifying',
+                'successfully verified',
+                'verification successful',
+                'you are verified',
+                'approved'
+            ]
+            
+            # Check URL patterns
+            is_error_url = any(x in final_url_str for x in ['error', 'failed', 'notapproved'])
+            is_success_url = any(x in final_url_str for x in ['success', 'verified', 'complete', 'approved'])
+            
+            # Check response content
+            has_error_content = any(indicator in response_text for indicator in not_approved_indicators)
+            has_success_content = any(indicator in response_text for indicator in success_indicators)
+            
+            # Determine final status
+            if has_error_content or is_error_url:
+                verification_status = "not_approved"
+                is_verified = False
+            elif has_success_content or is_success_url:
+                verification_status = "approved"
+                is_verified = True
+            else:
+                # Ambiguous - check for specific patterns
+                if 'pending' in response_text or 'review' in response_text:
+                    verification_status = "pending_review"
+                    is_verified = False
+                elif 'document' in response_text and 'upload' in response_text:
+                    verification_status = "document_required"
+                    is_verified = False
+                else:
+                    verification_status = "unknown"
+                    is_verified = False
+            
+            print(f"🎯 Verification Status: {verification_status}")
+            print(f"📄 Response preview: {response_text[:300]}")
+
+            return {
+                "success": True,
+                "clicked": True,
+                "status_code": response.status_code,
+                "final_url": str(response.url),
+                "verified": is_verified,
+                "verification_status": verification_status,
+                "response_snippet": response_text[:800]
+            }
+            
     except httpx.TimeoutException:
-        return {"success": False, "clicked": False, "message": "Timeout clicking link"}
+        return {"success": False, "clicked": False, "message": "Timeout clicking link", "verification_status": "timeout"}
     except Exception as e:
         print(f"❌ Error clicking link: {e}")
-        return {"success": False, "clicked": False, "message": str(e)}
+        return {"success": False, "clicked": False, "message": str(e), "verification_status": "error"}
 
 # =====================================================
-# EMAIL MONITORING JOB
+# EMAIL MONITORING JOB - DIPERBAIKI
 # =====================================================
 
 async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
-    """Monitor inbox dan auto-click verification link"""
+    """Monitor inbox dan auto-click verification link dengan notifikasi lengkap"""
     job = context.job
     user_id = job.user_id
     chat_id = job.chat_id
@@ -263,7 +326,7 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
     if check_count >= 30:
         await context.bot.send_message(
             chat_id=chat_id,
-            text=( 
+            text=(
                 "⏰ *Email monitoring timeout*\n\n"
                 "Tidak ada email verifikasi masuk dalam 5 menit.\n"
                 f"📧 Email: `{email_data.get('email')}`\n\n"
@@ -301,7 +364,7 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
             if "sheerid" in msg_from.lower() or "verif" in subject.lower():
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=( 
+                    text=(
                         "📧 *Email verifikasi diterima!*\n\n"
                         f"From: `{msg_from}`\n"
                         f"Subject: `{subject}`\n\n"
@@ -342,7 +405,7 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                     else:
                         await context.bot.send_message(
                             chat_id=chat_id,
-                            text=( 
+                            text=(
                                 "❌ *Gagal ekstrak emailToken*\n\n"
                                 "Email dari SheerID tidak mengandung token.\n"
                                 f"Body preview:\n`{body_text[:200]}`\n\n"
@@ -358,82 +421,149 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                 if verification_link:
                     await context.bot.send_message(
                         chat_id=chat_id,
-                        text=( 
+                        text=(
                             "🔗 *Verification link ready!*\n\n"
-                            "🖱️ Bot auto-clicking untuk konfirmasi...\n"
+                            "🖱️ Bot sedang mengeklik link untuk konfirmasi...\n"
                             "⏳ Tunggu sebentar..."
                         ),
                         parse_mode="Markdown"
                     )
 
+                    # CLICK THE LINK
                     click_result = await click_verification_link(verification_link)
 
                     if click_result.get("success") and click_result.get("clicked"):
+                        # Wait for SheerID processing
                         await asyncio.sleep(3)
+                        
                         verification_id = email_data.get("verification_id")
                         status_check = await check_sheerid_status(verification_id)
-                        final_status = status_check.get("status", "unknown")
-
-                        is_verified = (
-                            final_status == "success" or
-                            click_result.get("verified") or
-                            "success" in str(click_result.get("final_url", "")).lower()
-                        )
-
-                        if is_verified:
+                        sheerid_status = status_check.get("status", "unknown")
+                        
+                        verification_status = click_result.get("verification_status", "unknown")
+                        
+                        # NOTIFIKASI BERDASARKAN STATUS
+                        if verification_status == "approved" or click_result.get("verified"):
+                            # ✅ APPROVED / SUCCESS
                             await context.bot.send_message(
                                 chat_id=chat_id,
-                                text=( 
-                                    "🎉 *VERIFICATION SUCCESS!*\n\n"
-                                    "✅ *Status: APPROVED / VERIFIED*\n\n"
+                                text=(
+                                    "✅ *VERIFICATION APPROVED!*\n\n"
+                                    "🎉 *Status: SUCCESSFULLY VERIFIED*\n\n"
                                     f"📧 Email: `{email}`\n"
-                                    f"🎯 SheerID Status: `{final_status}`\n"
+                                    f"🎯 SheerID Status: `{sheerid_status}`\n"
                                     f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
                                     "🔗 Final URL:\n"
                                     f"`{click_result.get('final_url', 'N/A')[:100]}...`\n\n"
                                     "✨ *Verifikasi veteran berhasil!*\n"
-                                    "Sekarang kamu bisa gunakan discount/offer."
+                                    "Sekarang kamu bisa gunakan discount/offer yang tersedia."
                                 ),
                                 parse_mode="Markdown"
                             )
-
+                            
                             await send_log(
-                                f"✅ VERIFICATION SUCCESS ({BOT_NAME})\n\n"
+                                f"✅ VERIFICATION APPROVED ({BOT_NAME})\n\n"
                                 f"User ID: {user_id}\n"
                                 f"Email: {email}\n"
-                                f"Final Status: {final_status}\n"
+                                f"Status: {verification_status}\n"
+                                f"SheerID: {sheerid_status}\n"
                                 f"Link: {verification_link}"
                             )
-                        else:
+                            
+                        elif verification_status == "not_approved":
+                            # ❌ NOT APPROVED (seperti di gambar)
                             await context.bot.send_message(
                                 chat_id=chat_id,
                                 text=(
-                                    "⚠️ *VERIFICATION CLICKED - PENDING*\n\n"
-                                    "🔄 *Status: NOT YET APPROVED*\n\n"
+                                    "❌ *VERIFICATION NOT APPROVED*\n\n"
+                                    "⚠️ *Status: NOT APPROVED / REJECTED*\n\n"
                                     f"📧 Email: `{email}`\n"
-                                    f"🎯 SheerID Status: `{final_status}`\n"
+                                    f"🎯 SheerID Status: `{sheerid_status}`\n"
                                     f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
-                                    "📋 *Kemungkinan:*\n"
-                                    "• SheerID butuh document upload (DD214)\n"
-                                    "• Manual review diperlukan\n"
-                                    "• Data tidak cocok database\n\n"
-                                    "💡 Cek browser untuk status lengkap."
+                                    "📋 *Alasan kemungkinan:*\n"
+                                    "• Data tidak cocok dengan database SheerID\n"
+                                    "• Informasi veteran tidak valid\n"
+                                    "• Tanggal lahir/discharge tidak sesuai\n"
+                                    "• Branch/status tidak match\n\n"
+                                    "💡 *Saran:*\n"
+                                    "• Cek kembali data yang diinput\n"
+                                    "• Gunakan data veteran yang valid\n"
+                                    "• Coba dengan data berbeda\n\n"
+                                    "Ketik /veteran untuk mencoba lagi."
                                 ),
                                 parse_mode="Markdown"
                             )
-
+                            
                             await send_log(
-                                f"⚠️ VERIFICATION PENDING ({BOT_NAME})\n\n"
+                                f"❌ VERIFICATION NOT APPROVED ({BOT_NAME})\n\n"
                                 f"User ID: {user_id}\n"
                                 f"Email: {email}\n"
-                                f"Final Status: {final_status}"
+                                f"Status: NOT APPROVED\n"
+                                f"SheerID: {sheerid_status}"
+                            )
+                            
+                        elif verification_status == "document_required":
+                            # 📄 BUTUH DOKUMEN
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=(
+                                    "📄 *DOCUMENT UPLOAD REQUIRED*\n\n"
+                                    "⚠️ *Status: PENDING - DOCUMENT NEEDED*\n\n"
+                                    f"📧 Email: `{email}`\n"
+                                    f"🎯 SheerID Status: `{sheerid_status}`\n\n"
+                                    "📋 *SheerID membutuhkan dokumen:*\n"
+                                    "• DD214 (discharge papers)\n"
+                                    "• Military ID\n"
+                                    "• Veteran ID card\n\n"
+                                    "💡 Akses link ini di browser untuk upload dokumen:\n"
+                                    f"`{click_result.get('final_url', 'N/A')}`\n\n"
+                                    "Bot tidak bisa auto-upload dokumen."
+                                ),
+                                parse_mode="Markdown"
+                            )
+                            
+                        elif verification_status == "pending_review":
+                            # 🔄 PENDING REVIEW
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=(
+                                    "🔄 *VERIFICATION PENDING REVIEW*\n\n"
+                                    "⏳ *Status: UNDER MANUAL REVIEW*\n\n"
+                                    f"📧 Email: `{email}`\n"
+                                    f"🎯 SheerID Status: `{sheerid_status}`\n\n"
+                                    "📋 *Kemungkinan:*\n"
+                                    "• SheerID sedang melakukan review manual\n"
+                                    "• Data membutuhkan validasi tambahan\n"
+                                    "• Proses verifikasi memakan waktu lebih lama\n\n"
+                                    "💡 Cek email atau link verifikasi nanti untuk update status."
+                                ),
+                                parse_mode="Markdown"
+                            )
+                            
+                        else:
+                            # ⚠️ UNKNOWN STATUS
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=(
+                                    "⚠️ *VERIFICATION STATUS UNCLEAR*\n\n"
+                                    "🔄 *Status: UNKNOWN / AMBIGUOUS*\n\n"
+                                    f"📧 Email: `{email}`\n"
+                                    f"🎯 SheerID Status: `{sheerid_status}`\n"
+                                    f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
+                                    "💡 Akses link ini di browser untuk cek status:\n"
+                                    f"`{click_result.get('final_url', 'N/A')}`\n\n"
+                                    "Response preview:\n"
+                                    f"`{click_result.get('response_snippet', '')[:200]}...`"
+                                ),
+                                parse_mode="Markdown"
                             )
                     else:
+                        # ❌ CLICK FAILED
                         await context.bot.send_message(
                             chat_id=chat_id,
-                            text=( 
+                            text=(
                                 "❌ *AUTO-CLICK FAILED*\n\n"
-                                f"Error: {click_result.get('message', 'Unknown')}\n\n"
+                                f"Error: {click_result.get('message', 'Unknown')}\\n\n"
                                 f"🔗 Link: `{verification_link[:100]}...`\n\n"
                                 "Coba klik manual atau /veteran restart."
                             ),
@@ -447,6 +577,15 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(f"❌ Error in monitor_email_job: {e}")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"❌ *Monitoring Error*\n\n"
+                f"Error: {str(e)}\n\n"
+                "Coba /veteran untuk restart."
+            ),
+            parse_mode="Markdown"
+        )
 
 def start_email_monitoring(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
     """Start background job to monitor email"""
@@ -469,3 +608,653 @@ def start_email_monitoring(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
     )
 
     print(f"🔄 Started email monitoring for user {user_id}")
+
+# =====================================================
+# LOGGING FUNCTIONS
+# =====================================================
+
+async def send_log(text: str):
+    """Send log to admin"""
+    if not LOG_BOT_TOKEN or ADMIN_CHAT_ID == 0 or not LOG_API_URL:
+        return
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                payload = {"chat_id": ADMIN_CHAT_ID, "text": text}
+                resp = await client.post(LOG_API_URL, json=payload)
+                if resp.status_code == 200:
+                    return
+        except Exception as e:
+            print(f"❌ Log error (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2)
+
+async def log_user_start(update: Update, command_name: str):
+    user = update.effective_user
+    text = (
+        f"📥 NEW USER FLOW {command_name} ({BOT_NAME})\n\n"
+        f"ID: {user.id}\n"
+        f"Name: {user.full_name}\n"
+        f"Username: @{user.username or '-'}\n"
+        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    await send_log(text)
+
+async def log_verification_result(user_id: int, full_name: str, email: str, status: str, success: bool, error_msg: str = ""):
+    status_emoji = "✅" if success else "❌"
+    status_text = "SUCCESS" if success else "FAILED"
+    text = (
+        f"{status_emoji} VETERAN VERIFICATION {status_text} ({BOT_NAME})\n\n"
+        f"ID: {user_id}\n"
+        f"Name: {full_name}\n"
+        f"Email: {email}\n"
+        f"SheerID Status: {status}\n"
+    )
+    if not success:
+        text += f"\nError: {error_msg}"
+    await send_log(text)
+
+# =====================================================
+# TIMEOUT FUNCTIONS
+# =====================================================
+
+async def step_timeout_job(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    chat_id = job.chat_id
+    user_id = job.user_id
+    step_name = job.data.get("step", "UNKNOWN")
+
+    if user_id in v_user_data:
+        del v_user_data[user_id]
+
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"⏰ *Timeout di step {step_name}*\n\n"
+                "Kamu tidak merespon dalam 5 menit.\n"
+                "Kirim /veteran untuk mengulang."
+            ),
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        print(f"❌ Failed to send timeout: {e}")
+
+def set_step_timeout(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, step: str):
+    if context.job_queue is None:
+        return
+
+    job_name = f"timeout_veteran_{step}_{user_id}"
+    current_jobs = context.job_queue.get_jobs_by_name(job_name)
+    for job in current_jobs:
+        job.schedule_removal()
+
+    context.job_queue.run_once(
+        step_timeout_job,
+        when=STEP_TIMEOUT,
+        chat_id=chat_id,
+        user_id=user_id,
+        name=job_name,
+        data={"step": step},
+    )
+
+def clear_all_timeouts(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    if context.job_queue is None:
+        return
+    for step in ["URL", "STATUS", "ORG", "NAME", "BIRTH", "DISCHARGE"]:
+        job_name = f"timeout_veteran_{step}_{user_id}"
+        for job in context.job_queue.get_jobs_by_name(job_name):
+            job.schedule_removal()
+
+# =====================================================
+# SHEERID HELPER FUNCTIONS
+# =====================================================
+
+async def check_sheerid_status(verification_id: str) -> dict:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            url = f"{SHEERID_BASE_URL}/rest/v2/verification/{verification_id}"
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return {"success": False, "status": "unknown"}
+            data = resp.json()
+            return {"success": True, "status": data.get("currentStep", "unknown"), "data": data}
+        except Exception as e:
+            return {"success": False, "status": "unknown", "message": str(e)}
+
+async def submit_military_flow(
+    verification_id: str,
+    status: str,
+    first_name: str,
+    last_name: str,
+    birth_date: str,
+    email: str,
+    org: dict,
+    discharge_date: str,
+) -> dict:
+    """Submit military info ke SheerID"""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            # Step 1: Submit military status
+            step1_url = f"{SHEERID_BASE_URL}/rest/v2/verification/{verification_id}/step/collectMilitaryStatus"
+            step1_body = {"status": status}
+
+            print(f"📤 Step 1 URL: {step1_url}")
+            print(f"📦 Step 1 Payload: {step1_body}")
+
+            r1 = await client.post(step1_url, json=step1_body)
+
+            print(f"📥 Step 1 Response: {r1.status_code}")
+            print(f"📥 Step 1 Body: {r1.text[:500]}")
+
+            if r1.status_code != 200:
+                return {
+                    "success": False, 
+                    "message": f"collectMilitaryStatus failed: {r1.status_code} - {r1.text}"
+                }
+
+            d1 = r1.json()
+            submission_url = d1.get("submissionUrl")
+
+            if not submission_url:
+                return {"success": False, "message": "No submissionUrl in step 1 response"}
+
+            print(f"✅ Got submissionUrl: {submission_url}")
+
+            # Step 2: Submit personal info
+            submission_opt_in = (
+                "By submitting the personal information above, I acknowledge that my personal "
+                "information is being collected under the privacy policy of the business from "
+                "which I am seeking a discount, and I understand that my personal information "
+                "will be shared with SheerID as a processor/third-party service provider in "
+                "order for SheerID to confirm my eligibility for a special offer."
+            )
+
+            payload2 = {
+                "firstName": first_name,
+                "lastName": last_name,
+                "birthDate": birth_date,
+                "email": email,
+                "phoneNumber": "",
+                "organization": {
+                    "id": org["id"],
+                    "name": org["name"]
+                },
+                "dischargeDate": discharge_date,
+                "locale": "en-US",
+                "country": "US",
+                "metadata": {
+                    "marketConsentValue": False,
+                    "refererUrl": "",
+                    "verificationId": verification_id,
+                    "submissionOptIn": submission_opt_in,
+                },
+            }
+
+            print(f"📤 Step 2 URL (submissionUrl): {submission_url}")
+            print(f"📦 Step 2 Payload: {payload2}")
+
+            r2 = await client.post(submission_url, json=payload2)
+
+            print(f"📥 Step 2 Response: {r2.status_code}")
+            print(f"📥 Step 2 Body: {r2.text[:500]}")
+
+            if r2.status_code != 200:
+                return {
+                    "success": False, 
+                    "message": f"collectInactiveMilitaryPersonalInfo failed: {r2.status_code} - {r2.text}"
+                }
+
+            return {"success": True, "message": "Military info submitted successfully"}
+
+        except Exception as e:
+            print(f"❌ Exception in submit_military_flow: {e}")
+            return {"success": False, "message": str(e)}
+
+# =====================================================
+# CONVERSATION HANDLERS
+# =====================================================
+
+async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    await log_user_start(update, "/veteran")
+    v_user_data.pop(user_id, None)
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "URL")
+
+    await update.message.reply_text(
+        "🎖 *Military / Veteran Verification Helper*\n\n"
+        "✨ *FULLY AUTOMATED BOT*\n"
+        "• Auto-generate temporary email\n"
+        "• Auto-extract emailToken (handle incomplete links)\n"
+        "• Auto-build complete verification link\n"
+        "• Auto-click untuk konfirmasi\n"
+        "• Auto-detect approval status\n"
+        "• Clear notifications (Approved/Not Approved)\n\n"
+        "Kirim SheerID verification URL:\n\n"
+        "`https://services.sheerid.com/verify/...?verificationId=...`\n\n"
+        "Contoh:\n"
+        "`https://services.sheerid.com/verify/abcd/?verificationId=1234`\n\n"
+        "📅 *Note: Format tanggal YYYY-MM-DD*\n\n"
+        "*⏰ Kamu punya 5 menit*",
+        parse_mode="Markdown",
+    )
+    return V_URL
+
+async def veteran_get_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    url = update.message.text.strip()
+
+    match = re.search(r"verificationId=([A-Za-z0-9\-]+)", url)
+    if not match:
+        await update.message.reply_text(
+            "❌ *Invalid URL!*\n\n"
+            "Harus ada parameter `verificationId=...`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
+        )
+        set_step_timeout(context, chat_id, user_id, "URL")
+        return V_URL
+
+    verification_id = match.group(1)
+    v_user_data[user_id] = {
+        "verification_id": verification_id,
+        "original_url": url
+    }
+
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "STATUS")
+
+    await update.message.reply_text(
+        f"✅ *Verification ID:* `{verification_id}`\n\n"
+        "Pilih *military status* kamu:",
+        parse_mode="Markdown",
+        reply_markup=STATUS_KEYBOARD,
+    )
+    return V_STATUS
+
+async def veteran_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+
+    if user_id not in v_user_data:
+        await query.edit_message_text("❌ *Session expired*\n\nKirim /veteran lagi.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    data = query.data
+    if not data.startswith("status_"):
+        await query.edit_message_text("❌ Invalid status.\n\nKirim /veteran lagi.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    status = data.split("_", 1)[1]
+    v_user_data[user_id]["status"] = status
+
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "ORG")
+
+    await query.edit_message_text(
+        f"✅ Status: `{status}`\n\n"
+        "Pilih *branch of service*:",
+        parse_mode="Markdown",
+        reply_markup=ORG_KEYBOARD,
+    )
+    return V_ORG
+
+async def veteran_org_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+
+    if user_id not in v_user_data:
+        await query.edit_message_text("❌ *Session expired*\n\nKirim /veteran lagi.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    data = query.data
+    if not data.startswith("org_"):
+        await query.edit_message_text("❌ Invalid organization.\n\nKirim /veteran lagi.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    org_name = data.split("_", 1)[1]
+    org = MIL_ORGS.get(org_name)
+
+    if not org:
+        await query.edit_message_text("❌ Unknown organization.\n\nKirim /veteran lagi.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    v_user_data[user_id]["organization"] = org
+
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "NAME")
+
+    await query.edit_message_text(
+        f"✅ Branch: *{org_name}*\n\n"
+        "Kirim *nama lengkap* kamu.\n"
+        "Contoh: `John Michael Smith`\n\n"
+        "*⏰ Kamu punya 5 menit*",
+        parse_mode="Markdown",
+    )
+    return V_NAME
+
+async def veteran_get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    full_name = update.message.text.strip()
+    parts = full_name.split()
+
+    if len(parts) < 2:
+        await update.message.reply_text(
+            "❌ Tolong kirim *first name DAN last name*.\n"
+            "Contoh: `John Smith`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
+        )
+        set_step_timeout(context, chat_id, user_id, "NAME")
+        return V_NAME
+
+    v_user_data.setdefault(user_id, {})
+    v_user_data[user_id]["first_name"] = parts[0]
+    v_user_data[user_id]["last_name"] = " ".join(parts[1:])
+    v_user_data[user_id]["full_name"] = full_name
+
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "BIRTH")
+
+    await update.message.reply_text(
+        f"✅ *Name:* {full_name}\n\n"
+        "Kirim *tanggal lahir* (format `YYYY-MM-DD`).\n"
+        "Contoh: `1985-07-21`\n\n"
+        "*⏰ Kamu punya 5 menit*",
+        parse_mode="Markdown",
+    )
+    return V_BIRTH
+
+async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    birth = update.message.text.strip()
+
+    if len(birth) != 10 or birth[4] != "-" or birth[7] != "-":
+        await update.message.reply_text(
+            "❌ Format tanggal salah.\n"
+            "Gunakan format `YYYY-MM-DD`.\n"
+            "Contoh: `1985-07-21`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
+        )
+        set_step_timeout(context, chat_id, user_id, "BIRTH")
+        return V_BIRTH
+
+    try:
+        parts = birth.split("-")
+        year = int(parts[0])
+        month = int(parts[1])
+        day = int(parts[2])
+
+        if not (1900 <= year <= 2010):
+            raise ValueError("Invalid year")
+        if not (1 <= month <= 12):
+            raise ValueError("Invalid month")
+        if not (1 <= day <= 31):
+            raise ValueError("Invalid day")
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Tanggal tidak valid.\n"
+            "Gunakan format `YYYY-MM-DD`.\n"
+            "Contoh: `1985-07-21`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
+        )
+        set_step_timeout(context, chat_id, user_id, "BIRTH")
+        return V_BIRTH
+
+    v_user_data.setdefault(user_id, {})
+    v_user_data[user_id]["birth_date"] = birth
+
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "DISCHARGE")
+
+    await update.message.reply_text(
+        f"✅ *Birth date:* `{birth}`\n\n"
+        "Kirim *discharge date* (format `YYYY-MM-DD`).\n"
+        "Contoh: `2020-12-15`\n"
+        "Kalau masih aktif, pakai tanggal masuk akal.\n\n"
+        "*⏰ Kamu punya 5 menit*",
+        parse_mode="Markdown",
+    )
+    return V_DISCHARGE
+
+async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    ddate = update.message.text.strip()
+
+    if len(ddate) != 10 or ddate[4] != "-" or ddate[7] != "-":
+        await update.message.reply_text(
+            "❌ Format tanggal salah.\n"
+            "Gunakan format `YYYY-MM-DD`.\n"
+            "Contoh: `2020-12-15`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
+        )
+        set_step_timeout(context, chat_id, user_id, "DISCHARGE")
+        return V_DISCHARGE
+
+    try:
+        parts = ddate.split("-")
+        year = int(parts[0])
+        month = int(parts[1])
+        day = int(parts[2])
+
+        if not (1950 <= year <= 2026):
+            raise ValueError("Invalid year")
+        if not (1 <= month <= 12):
+            raise ValueError("Invalid month")
+        if not (1 <= day <= 31):
+            raise ValueError("Invalid day")
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Tanggal tidak valid.\n"
+            "Gunakan format `YYYY-MM-DD`.\n"
+            "Contoh: `2020-12-15`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
+        )
+        set_step_timeout(context, chat_id, user_id, "DISCHARGE")
+        return V_DISCHARGE
+
+    v_user_data.setdefault(user_id, {})
+    v_user_data[user_id]["discharge_date"] = ddate
+
+    await update.message.reply_text(
+        "⏳ *Generating temporary email...*\n"
+        "Bot akan auto-create email untuk verifikasi.",
+        parse_mode="Markdown"
+    )
+
+    email_result = await create_temp_email()
+
+    if not email_result.get("success"):
+        await update.message.reply_text(
+            "❌ *Failed to generate email*\n\n"
+            f"Error: {email_result.get('message')}\n\n"
+            "Coba lagi dengan /veteran",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
+    temp_email = email_result["email"]
+    v_user_data[user_id]["email"] = temp_email
+
+    temp_email_storage[user_id] = {
+        "email": temp_email,
+        "token": email_result["token"],
+        "verification_id": v_user_data[user_id]["verification_id"],
+        "original_url": v_user_data[user_id]["original_url"],
+        "check_count": 0
+    }
+
+    data = v_user_data[user_id]
+    summary = (
+        "🔎 *Konfirmasi data veteran:*\n\n"
+        f"VerificationId: `{data['verification_id']}`\n"
+        f"Status: `{data['status']}`\n"
+        f"Branch: `{data['organization']['name']}`\n"
+        f"Name: `{data['first_name']} {data['last_name']}`\n"
+        f"Birth: `{data['birth_date']}`\n"
+        f"Discharge: `{data['discharge_date']}`\n"
+        f"📧 Email (AUTO): `{temp_email}`\n\n"
+        "✅ *Temporary email generated!*\n"
+        "🤖 Bot akan:\n"
+        "1️⃣ Submit data ke SheerID\n"
+        "2️⃣ Monitor email inbox\n"
+        "3️⃣ Ekstrak emailToken (handle incomplete link)\n"
+        "4️⃣ Build complete verification link\n"
+        "5️⃣ Auto-click untuk konfirmasi\n"
+        "6️⃣ Detect approval status (Approved/Not Approved)\n"
+        "7️⃣ Send clear notification\n\n"
+        "Ketik `OK` untuk mulai, atau `/cancel` untuk batal."
+    )
+
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "CONFIRM")
+
+    await update.message.reply_text(summary, parse_mode="Markdown")
+    return V_CONFIRM
+
+async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    text = update.message.text.strip().lower()
+
+    if text != "ok":
+        await update.message.reply_text(
+            "Ketik `OK` untuk lanjut atau `/cancel` untuk batal.",
+            parse_mode="Markdown",
+        )
+        return V_CONFIRM
+
+    if user_id not in v_user_data:
+        await update.message.reply_text("❌ Session hilang.\n\nKirim /veteran lagi.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    data = v_user_data[user_id]
+    verification_id = data["verification_id"]
+
+    await update.message.reply_text(
+        "🚀 *Mengirim data ke SheerID...*\n"
+        "⏳ Mohon tunggu...",
+        parse_mode="Markdown",
+    )
+
+    result = await submit_military_flow(
+        verification_id=verification_id,
+        status=data["status"],
+        first_name=data["first_name"],
+        last_name=data["last_name"],
+        birth_date=data["birth_date"],
+        email=data["email"],
+        org=data["organization"],
+        discharge_date=data["discharge_date"],
+    )
+
+    status_info = await check_sheerid_status(verification_id)
+    status = status_info.get("status", "unknown")
+
+    await log_verification_result(
+        user_id=user_id,
+        full_name=data["full_name"],
+        email=data["email"],
+        status=status,
+        success=result["success"],
+        error_msg=result.get("message", ""),
+    )
+
+    if not result["success"]:
+        await update.message.reply_text(
+            "❌ *SUBMISSION FAILED*\n\n"
+            f"Error: {result.get('message')}\n\n"
+            "Coba lagi atau /veteran restart.",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text(
+            "✅ *Data submitted successfully!*\n\n"
+            f"📧 Email: `{data['email']}`\n"
+            f"🎯 Current status: `{status}`\n\n"
+            "🔄 *Bot monitoring inbox...*\n"
+            "🖱️ Akan auto-click begitu email masuk!\n"
+            "🔧 Handle incomplete links otomatis!\n"
+            "📊 Detect approval status otomatis!\n\n"
+            "⏰ Checking email setiap 10 detik (max 5 menit)...",
+            parse_mode="Markdown",
+        )
+
+        start_email_monitoring(context, chat_id, user_id)
+
+    clear_all_timeouts(context, user_id)
+    return ConversationHandler.END
+
+async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    v_user_data.pop(user_id, None)
+    temp_email_storage.pop(user_id, None)
+    clear_all_timeouts(context, user_id)
+
+    await update.message.reply_text(
+        "❌ *Verification cancelled*\n\n"
+        "Kirim /veteran untuk mulai lagi.",
+        parse_mode="Markdown",
+    )
+    return ConversationHandler.END
+
+# =====================================================
+# MAIN APPLICATION
+# =====================================================
+
+def main():
+    # Setup custom request with higher timeout
+    request = HTTPXRequest(
+        connection_pool_size=20,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0,
+    )
+
+    app = Application.builder().token(BOT_TOKEN).request(request).build()
+
+    veteran_conv = ConversationHandler(
+        entry_points=[CommandHandler("veteran", veteran_start)],
+        states={
+            V_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_url)],
+            V_STATUS: [CallbackQueryHandler(veteran_status_callback, pattern="^status_")],
+            V_ORG: [CallbackQueryHandler(veteran_org_callback, pattern="^org_")],
+            V_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_name)],
+            V_BIRTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_birth)],
+            V_DISCHARGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_discharge)],
+            V_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_confirm)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_handler)],
+        conversation_timeout=STEP_TIMEOUT,
+    )
+
+    app.add_handler(veteran_conv)
+
+    print(f"🚀 {BOT_NAME} is running...")
+    print(f"📧 Custom email domain: {CUSTOM_DOMAIN}")
+    print(f"🔧 Email API: {CUSTOM_MAIL_API}")
+    print("="*50)
+
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
