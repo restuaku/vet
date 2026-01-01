@@ -1,15 +1,12 @@
-FROM python:3.11-slim
+FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
 
 WORKDIR /app
 
-# Copy requirements
 COPY requirements.txt .
+RUN pip install -r requirements.txt
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Browser sudah terinstall di base image
+RUN playwright install-deps
 
-# Copy aplikasi
 COPY . .
-
-# Run bot
 CMD ["python", "bot.py"]
