@@ -1415,7 +1415,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel_veteran)],
         conversation_timeout=STEP_TIMEOUT,
-        per_message=True,
+        per_message=False,
         per_chat=True,
         per_user=True,
     )
@@ -1428,7 +1428,11 @@ def main():
     print(f"✅ JobQueue enabled for email monitoring")
 
     # Run bot
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(
+    allowed_updates=Update.ALL_TYPES,
+    drop_pending_updates=True  # 
+    )
+   
 
 if __name__ == "__main__":
     main()
