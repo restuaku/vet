@@ -303,7 +303,7 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
             # DETEKSI STATUS dari page content
             not_approved_indicators = [
                 'not approved',
-                'not verified',
+                'We are unable',
                 'could not verify',
                 'unable to verify',
                 'verification failed',
@@ -317,12 +317,12 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
 
             success_indicators = [
                 'verified successfully',
-                'verification complete',
+                'Enjoy 1 Year',
                 'countinue',
                 'successfully verified',
                 'verification successful',
                 'you are verified',
-                'you've been verified',
+                'Youve been verified',
                 'approved',
                 'congratulations',
                 'eligibility confirmed'
@@ -989,7 +989,7 @@ async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🎖 *Military / Veteran Verification Helper*\n\n"
-        "✨ *FULLY AUTOMATED BOT*\n"
+        "✨ *Org-Lemah AUTOMATED BOT*\n"
         "• Auto-generate temporary email\n"
         "• Auto-extract emailToken\n"
         "• 🌐 **REAL BROWSER**\n"
