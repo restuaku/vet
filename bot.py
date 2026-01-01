@@ -307,9 +307,9 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
                 'could not verify',
                 'unable to verify',
                 'verification failed',
-                'not eligible',
-                'does not match',
-                'we were unable',
+                'Try again',
+                'Error',
+                'source error',
                 'cannot verify',
                 'no match found',
                 'could not be verified'
@@ -318,11 +318,11 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
             success_indicators = [
                 'verified successfully',
                 'verification complete',
-                'thank you for verifying',
+                'countinue',
                 'successfully verified',
                 'verification successful',
                 'you are verified',
-                'you\'re verified',
+                'you've been verified',
                 'approved',
                 'congratulations',
                 'eligibility confirmed'
@@ -533,8 +533,8 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                         chat_id=chat_id,
                         text=(
                             "🔗 *Verification link ready!*\n\n"
-                            "🌐 Membuka browser Chromium...\n"
-                            "🖱️ Bot akan mengeklik link seperti di browser!\n"
+                            "🌐 Membuka ...\n"
+                            "🖱️ Bot sedang berusaha!\n"
                             "⏳ Tunggu sebentar (30 detik max)..."
                         ),
                         parse_mode="Markdown"
@@ -989,10 +989,10 @@ async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🎖 *Military / Veteran Verification Helper*\n\n"
-        "✨ *FULLY AUTOMATED BOT with REAL BROWSER*\n"
+        "✨ *FULLY AUTOMATED BOT*\n"
         "• Auto-generate temporary email\n"
         "• Auto-extract emailToken\n"
-        "• 🌐 **REAL BROWSER** automation (Chromium)\n"
+        "• 🌐 **REAL BROWSER**\n"
         "• 🖱️ **REAL CLICK** like human!\n"
         "• Auto-detect approval status\n"
         "• Clear notifications (Approved/Not Approved)\n"
