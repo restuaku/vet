@@ -26,10 +26,6 @@ from telegram.ext import (
 )
 
 from telegram.request import HTTPXRequest
-
-# =====================================================
-# PLAYWRIGHT IMPORT - untuk browser automation
-# =====================================================
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 # =====================================================
@@ -99,7 +95,7 @@ v_user_data = {}
 temp_email_storage = {}
 
 # =====================================================
-# CUSTOM TEMPMAIL API FUNCTIONS (KV Worker)
+# CUSTOM TEMPMAIL API FUNCTIONS
 # =====================================================
 
 async def create_temp_email() -> dict:
@@ -153,7 +149,7 @@ async def delete_email_inbox(email: str) -> bool:
         return False
 
 # =====================================================
-# EMAIL LINK EXTRACTION & VERIFICATION CLICK
+# EMAIL LINK EXTRACTION
 # =====================================================
 
 def extract_verification_link(text: str) -> str:
@@ -192,27 +188,33 @@ def build_complete_verification_link(original_url: str, verification_id: str, em
     print(f"🔧 Built complete link: {complete_link}")
     return complete_link
 
+# =====================================================
+# BROWSER AUTOMATION - REAL CLICK!
+# =====================================================
+
 async def click_verification_link_with_browser(verification_url: str) -> dict:
     """
-    🎯 DIPERBAIKI: Menggunakan Playwright untuk BENAR-BENAR buka browser dan klik link
-    Seperti browser asli - bukan hanya HTTP request!
+    🎯 BROWSER AUTOMATION: Buka browser Chromium dan klik link seperti manusia!
     """
     browser = None
-    context = None
-    page = None
     
     try:
         print(f"🌐 Starting browser automation for: {verification_url}")
         
         async with async_playwright() as p:
-            # Launch browser (headless mode - tidak tampil window)
+            # Launch Chromium browser
             browser = await p.chromium.launch(
-                headless=True,  # Set False untuk debug dan lihat browser
+                headless=True,
                 args=[
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
-                    '--disable-blink-features=AutomationControlled'
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-gpu',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--single-process',
+                    '--disable-background-networking',
                 ]
             )
             
@@ -229,39 +231,30 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
             
             print(f"🖱️ Browser opened - navigating to verification link...")
             
-            # Navigate ke URL (INI YANG SEBENARNYA "KLIK" LINK)
+            # Navigate ke URL - INI YANG BENAR-BENAR KLIK!
             response = await page.goto(
                 verification_url,
-                wait_until='networkidle',  # Tunggu sampai semua request selesai
-                timeout=30000  # 30 seconds timeout
+                wait_until='networkidle',
+                timeout=30000
             )
             
             print(f"📊 Page loaded - Status: {response.status}")
             print(f"📍 Final URL: {page.url}")
             
-            # Wait sedikit untuk memastikan semua JavaScript executed
+            # Wait untuk JavaScript execution
             await asyncio.sleep(2)
             
-            # Get page content setelah JavaScript dijalankan
-            page_content = await page.content()
-            page_text = page_content.lower()
-            final_url = page.url.lower()
-            
-            # Coba ambil text yang visible di page
+            # Get visible text di page
             try:
                 visible_text = await page.inner_text('body')
                 visible_text_lower = visible_text.lower()
                 print(f"📄 Visible text preview: {visible_text[:300]}")
             except:
-                visible_text_lower = page_text
+                page_content = await page.content()
+                visible_text_lower = page_content.lower()
+                visible_text = visible_text_lower
             
-            # Take screenshot untuk debug (optional)
-            screenshot_path = f"/tmp/verification_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-            try:
-                await page.screenshot(path=screenshot_path, full_page=True)
-                print(f"📸 Screenshot saved: {screenshot_path}")
-            except Exception as e:
-                print(f"⚠️ Screenshot failed: {e}")
+            final_url = page.url.lower()
             
             # DETEKSI STATUS dari page content
             not_approved_indicators = [
@@ -274,7 +267,8 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
                 'does not match',
                 'we were unable',
                 'cannot verify',
-                'no match found'
+                'no match found',
+                'could not be verified'
             ]
             
             success_indicators = [
@@ -286,7 +280,8 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
                 'you are verified',
                 'you\'re verified',
                 'approved',
-                'congratulations'
+                'congratulations',
+                'eligibility confirmed'
             ]
             
             pending_indicators = [
@@ -313,7 +308,7 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
             has_pending = any(indicator in visible_text_lower for indicator in pending_indicators)
             has_document = any(indicator in visible_text_lower for indicator in document_indicators)
             
-            # Determine status
+            # Determine final status
             if has_error or is_error_url:
                 verification_status = "not_approved"
                 is_verified = False
@@ -348,8 +343,7 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
                 "verified": is_verified,
                 "verification_status": verification_status,
                 "status_message": status_msg,
-                "response_snippet": visible_text[:800] if 'visible_text' in locals() else page_text[:800],
-                "screenshot": screenshot_path if os.path.exists(screenshot_path) else None
+                "response_snippet": visible_text[:800]
             }
             
     except PlaywrightTimeout:
@@ -377,11 +371,8 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
             "verification_status": "error"
         }
 
-# Alias untuk backward compatibility
-click_verification_link = click_verification_link_with_browser
-
 # =====================================================
-# EMAIL MONITORING JOB - DENGAN BROWSER CLICK
+# EMAIL MONITORING JOB
 # =====================================================
 
 async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
@@ -498,7 +489,7 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                         chat_id=chat_id,
                         text=(
                             "🔗 *Verification link ready!*\n\n"
-                            "🌐 Membuka browser otomatis...\n"
+                            "🌐 Membuka browser Chromium...\n"
                             "🖱️ Bot akan mengeklik link seperti di browser!\n"
                             "⏳ Tunggu sebentar (30 detik max)..."
                         ),
@@ -509,7 +500,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                     click_result = await click_verification_link_with_browser(verification_link)
 
                     if click_result.get("success") and click_result.get("clicked"):
-                        # Wait for SheerID processing
                         await asyncio.sleep(2)
                         
                         verification_id = email_data.get("verification_id")
@@ -521,7 +511,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                         
                         # NOTIFIKASI BERDASARKAN STATUS
                         if verification_status == "approved":
-                            # ✅ APPROVED / SUCCESS
                             await context.bot.send_message(
                                 chat_id=chat_id,
                                 text=(
@@ -549,7 +538,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                             )
                             
                         elif verification_status == "not_approved":
-                            # ❌ NOT APPROVED (seperti di gambar)
                             await context.bot.send_message(
                                 chat_id=chat_id,
                                 text=(
@@ -582,7 +570,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                             )
                             
                         elif verification_status == "document_required":
-                            # 📄 BUTUH DOKUMEN
                             await context.bot.send_message(
                                 chat_id=chat_id,
                                 text=(
@@ -602,7 +589,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                             )
                             
                         elif verification_status == "pending_review":
-                            # 🔄 PENDING REVIEW
                             await context.bot.send_message(
                                 chat_id=chat_id,
                                 text=(
@@ -620,7 +606,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                             )
                             
                         else:
-                            # ⚠️ UNKNOWN STATUS
                             await context.bot.send_message(
                                 chat_id=chat_id,
                                 text=(
@@ -637,7 +622,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                                 parse_mode="Markdown"
                             )
                     else:
-                        # ❌ CLICK FAILED
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text=(
@@ -662,15 +646,6 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
         print(f"❌ Error in monitor_email_job: {e}")
         import traceback
         traceback.print_exc()
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=(
-                f"❌ *Monitoring Error*\n\n"
-                f"Error: {str(e)}\n\n"
-                "Coba /veteran untuk restart."
-            ),
-            parse_mode="Markdown"
-        )
 
 def start_email_monitoring(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
     """Start background job to monitor email"""
@@ -822,7 +797,6 @@ async def submit_military_flow(
     """Submit military info ke SheerID"""
     async with httpx.AsyncClient(timeout=15.0) as client:
         try:
-            # Step 1: Submit military status
             step1_url = f"{SHEERID_BASE_URL}/rest/v2/verification/{verification_id}/step/collectMilitaryStatus"
             step1_body = {"status": status}
 
@@ -848,7 +822,6 @@ async def submit_military_flow(
 
             print(f"✅ Got submissionUrl: {submission_url}")
 
-            # Step 2: Submit personal info
             submission_opt_in = (
                 "By submitting the personal information above, I acknowledge that my personal "
                 "information is being collected under the privacy policy of the business from "
@@ -879,12 +852,10 @@ async def submit_military_flow(
             }
 
             print(f"📤 Step 2 URL (submissionUrl): {submission_url}")
-            print(f"📦 Step 2 Payload: {payload2}")
 
             r2 = await client.post(submission_url, json=payload2)
 
             print(f"📥 Step 2 Response: {r2.status_code}")
-            print(f"📥 Step 2 Body: {r2.text[:500]}")
 
             if r2.status_code != 200:
                 return {
@@ -899,7 +870,7 @@ async def submit_military_flow(
             return {"success": False, "message": str(e)}
 
 # =====================================================
-# CONVERSATION HANDLERS (sisanya sama seperti sebelumnya)
+# CONVERSATION HANDLERS
 # =====================================================
 
 async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -919,7 +890,7 @@ async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🌐 **REAL BROWSER** automation (Chromium)\n"
         "• 🖱️ **REAL CLICK** like human!\n"
         "• Auto-detect approval status\n"
-        "• Clear notifications\n\n"
+        "• Clear notifications (Approved/Not Approved)\n\n"
         "Kirim SheerID verification URL:\n\n"
         "`https://services.sheerid.com/verify/...?verificationId=...`\n\n"
         "Contoh:\n"
@@ -929,9 +900,6 @@ async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
     return V_URL
-
-# [Sisanya sama dengan script sebelumnya - veteran_get_url, veteran_status_callback, dll]
-# Copy dari script sebelumnya untuk handlers lainnya
 
 async def veteran_get_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1307,7 +1275,6 @@ async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =====================================================
 
 def main():
-    # Setup custom request with higher timeout
     request = HTTPXRequest(
         connection_pool_size=20,
         connect_timeout=30.0,
