@@ -28,6 +28,11 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 # =====================================================
+# PLAYWRIGHT IMPORT - untuk browser automation
+# =====================================================
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+
+# =====================================================
 # KONFIGURASI
 # =====================================================
 
@@ -187,55 +192,78 @@ def build_complete_verification_link(original_url: str, verification_id: str, em
     print(f"🔧 Built complete link: {complete_link}")
     return complete_link
 
-async def click_verification_link(verification_url: str) -> dict:
+async def click_verification_link_with_browser(verification_url: str) -> dict:
     """
-    DIPERBAIKI: Auto-click verification link dengan session persistence
-    dan deteksi status yang lebih akurat
+    🎯 DIPERBAIKI: Menggunakan Playwright untuk BENAR-BENAR buka browser dan klik link
+    Seperti browser asli - bukan hanya HTTP request!
     """
+    browser = None
+    context = None
+    page = None
+    
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0'
-        }
-
-        # Gunakan cookies untuk maintain session
-        cookies = httpx.Cookies()
+        print(f"🌐 Starting browser automation for: {verification_url}")
         
-        async with httpx.AsyncClient(
-            timeout=30.0,
-            follow_redirects=True,
-            headers=headers,
-            cookies=cookies
-        ) as client:
-            print(f"🖱️ Clicking verification link: {verification_url}")
+        async with async_playwright() as p:
+            # Launch browser (headless mode - tidak tampil window)
+            browser = await p.chromium.launch(
+                headless=True,  # Set False untuk debug dan lihat browser
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-blink-features=AutomationControlled'
+                ]
+            )
             
-            # First request - initial click
-            response = await client.get(verification_url)
-            print(f"📊 Response status: {response.status_code}")
-            print(f"📍 Final URL: {response.url}")
+            # Create browser context dengan user agent real
+            context = await browser.new_context(
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                viewport={'width': 1920, 'height': 1080},
+                locale='en-US',
+                timezone_id='America/New_York'
+            )
             
-            if response.status_code != 200:
-                return {
-                    "success": False,
-                    "clicked": True,
-                    "status_code": response.status_code,
-                    "message": f"Non-200 response: {response.status_code}"
-                }
-
-            response_text = response.text.lower()
-            final_url_str = str(response.url).lower()
+            # Create new page
+            page = await context.new_page()
             
-            # PERBAIKAN: Deteksi status yang lebih detail
-            # Cek error/not approved indicators
+            print(f"🖱️ Browser opened - navigating to verification link...")
+            
+            # Navigate ke URL (INI YANG SEBENARNYA "KLIK" LINK)
+            response = await page.goto(
+                verification_url,
+                wait_until='networkidle',  # Tunggu sampai semua request selesai
+                timeout=30000  # 30 seconds timeout
+            )
+            
+            print(f"📊 Page loaded - Status: {response.status}")
+            print(f"📍 Final URL: {page.url}")
+            
+            # Wait sedikit untuk memastikan semua JavaScript executed
+            await asyncio.sleep(2)
+            
+            # Get page content setelah JavaScript dijalankan
+            page_content = await page.content()
+            page_text = page_content.lower()
+            final_url = page.url.lower()
+            
+            # Coba ambil text yang visible di page
+            try:
+                visible_text = await page.inner_text('body')
+                visible_text_lower = visible_text.lower()
+                print(f"📄 Visible text preview: {visible_text[:300]}")
+            except:
+                visible_text_lower = page_text
+            
+            # Take screenshot untuk debug (optional)
+            screenshot_path = f"/tmp/verification_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            try:
+                await page.screenshot(path=screenshot_path, full_page=True)
+                print(f"📸 Screenshot saved: {screenshot_path}")
+            except Exception as e:
+                print(f"⚠️ Screenshot failed: {e}")
+            
+            # DETEKSI STATUS dari page content
             not_approved_indicators = [
                 'not approved',
                 'not verified',
@@ -244,11 +272,11 @@ async def click_verification_link(verification_url: str) -> dict:
                 'verification failed',
                 'not eligible',
                 'does not match',
-                'error',
-                'please try again'
+                'we were unable',
+                'cannot verify',
+                'no match found'
             ]
             
-            # Cek success indicators
             success_indicators = [
                 'verified successfully',
                 'verification complete',
@@ -256,61 +284,108 @@ async def click_verification_link(verification_url: str) -> dict:
                 'successfully verified',
                 'verification successful',
                 'you are verified',
-                'approved'
+                'you\'re verified',
+                'approved',
+                'congratulations'
+            ]
+            
+            pending_indicators = [
+                'pending review',
+                'under review',
+                'being reviewed',
+                'manual review'
+            ]
+            
+            document_indicators = [
+                'upload document',
+                'document required',
+                'please upload',
+                'provide documentation'
             ]
             
             # Check URL patterns
-            is_error_url = any(x in final_url_str for x in ['error', 'failed', 'notapproved'])
-            is_success_url = any(x in final_url_str for x in ['success', 'verified', 'complete', 'approved'])
+            is_error_url = any(x in final_url for x in ['error', 'failed', 'notapproved', 'unable'])
+            is_success_url = any(x in final_url for x in ['success', 'verified', 'complete', 'approved'])
             
-            # Check response content
-            has_error_content = any(indicator in response_text for indicator in not_approved_indicators)
-            has_success_content = any(indicator in response_text for indicator in success_indicators)
+            # Check visible text
+            has_error = any(indicator in visible_text_lower for indicator in not_approved_indicators)
+            has_success = any(indicator in visible_text_lower for indicator in success_indicators)
+            has_pending = any(indicator in visible_text_lower for indicator in pending_indicators)
+            has_document = any(indicator in visible_text_lower for indicator in document_indicators)
             
-            # Determine final status
-            if has_error_content or is_error_url:
+            # Determine status
+            if has_error or is_error_url:
                 verification_status = "not_approved"
                 is_verified = False
-            elif has_success_content or is_success_url:
+                status_msg = "NOT APPROVED - Data tidak cocok atau ditolak"
+            elif has_success or is_success_url:
                 verification_status = "approved"
                 is_verified = True
+                status_msg = "APPROVED - Verifikasi berhasil!"
+            elif has_document:
+                verification_status = "document_required"
+                is_verified = False
+                status_msg = "DOCUMENT REQUIRED - Butuh upload dokumen"
+            elif has_pending:
+                verification_status = "pending_review"
+                is_verified = False
+                status_msg = "PENDING REVIEW - Sedang direview manual"
             else:
-                # Ambiguous - check for specific patterns
-                if 'pending' in response_text or 'review' in response_text:
-                    verification_status = "pending_review"
-                    is_verified = False
-                elif 'document' in response_text and 'upload' in response_text:
-                    verification_status = "document_required"
-                    is_verified = False
-                else:
-                    verification_status = "unknown"
-                    is_verified = False
+                verification_status = "unknown"
+                is_verified = False
+                status_msg = "UNKNOWN - Status tidak dapat dideteksi"
             
-            print(f"🎯 Verification Status: {verification_status}")
-            print(f"📄 Response preview: {response_text[:300]}")
-
+            print(f"🎯 Detection Result: {verification_status}")
+            print(f"📝 Status Message: {status_msg}")
+            
+            await browser.close()
+            
             return {
                 "success": True,
                 "clicked": True,
-                "status_code": response.status_code,
-                "final_url": str(response.url),
+                "status_code": response.status,
+                "final_url": page.url,
                 "verified": is_verified,
                 "verification_status": verification_status,
-                "response_snippet": response_text[:800]
+                "status_message": status_msg,
+                "response_snippet": visible_text[:800] if 'visible_text' in locals() else page_text[:800],
+                "screenshot": screenshot_path if os.path.exists(screenshot_path) else None
             }
             
-    except httpx.TimeoutException:
-        return {"success": False, "clicked": False, "message": "Timeout clicking link", "verification_status": "timeout"}
+    except PlaywrightTimeout:
+        if browser:
+            await browser.close()
+        return {
+            "success": False,
+            "clicked": False,
+            "message": "Browser timeout - page tidak load dalam 30 detik",
+            "verification_status": "timeout"
+        }
     except Exception as e:
-        print(f"❌ Error clicking link: {e}")
-        return {"success": False, "clicked": False, "message": str(e), "verification_status": "error"}
+        if browser:
+            try:
+                await browser.close()
+            except:
+                pass
+        print(f"❌ Browser automation error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "clicked": False,
+            "message": f"Browser error: {str(e)}",
+            "verification_status": "error"
+        }
+
+# Alias untuk backward compatibility
+click_verification_link = click_verification_link_with_browser
 
 # =====================================================
-# EMAIL MONITORING JOB - DIPERBAIKI
+# EMAIL MONITORING JOB - DENGAN BROWSER CLICK
 # =====================================================
 
 async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
-    """Monitor inbox dan auto-click verification link dengan notifikasi lengkap"""
+    """Monitor inbox dan auto-click verification link dengan REAL BROWSER"""
     job = context.job
     user_id = job.user_id
     chat_id = job.chat_id
@@ -423,27 +498,29 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                         chat_id=chat_id,
                         text=(
                             "🔗 *Verification link ready!*\n\n"
-                            "🖱️ Bot sedang mengeklik link untuk konfirmasi...\n"
-                            "⏳ Tunggu sebentar..."
+                            "🌐 Membuka browser otomatis...\n"
+                            "🖱️ Bot akan mengeklik link seperti di browser!\n"
+                            "⏳ Tunggu sebentar (30 detik max)..."
                         ),
                         parse_mode="Markdown"
                     )
 
-                    # CLICK THE LINK
-                    click_result = await click_verification_link(verification_link)
+                    # CLICK DENGAN BROWSER ASLI!
+                    click_result = await click_verification_link_with_browser(verification_link)
 
                     if click_result.get("success") and click_result.get("clicked"):
                         # Wait for SheerID processing
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(2)
                         
                         verification_id = email_data.get("verification_id")
                         status_check = await check_sheerid_status(verification_id)
                         sheerid_status = status_check.get("status", "unknown")
                         
                         verification_status = click_result.get("verification_status", "unknown")
+                        status_message = click_result.get("status_message", "")
                         
                         # NOTIFIKASI BERDASARKAN STATUS
-                        if verification_status == "approved" or click_result.get("verified"):
+                        if verification_status == "approved":
                             # ✅ APPROVED / SUCCESS
                             await context.bot.send_message(
                                 chat_id=chat_id,
@@ -452,7 +529,8 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                                     "🎉 *Status: SUCCESSFULLY VERIFIED*\n\n"
                                     f"📧 Email: `{email}`\n"
                                     f"🎯 SheerID Status: `{sheerid_status}`\n"
-                                    f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
+                                    f"📊 HTTP Status: `{click_result.get('status_code')}`\n"
+                                    f"✨ Message: {status_message}\n\n"
                                     "🔗 Final URL:\n"
                                     f"`{click_result.get('final_url', 'N/A')[:100]}...`\n\n"
                                     "✨ *Verifikasi veteran berhasil!*\n"
@@ -479,7 +557,8 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                                     "⚠️ *Status: NOT APPROVED / REJECTED*\n\n"
                                     f"📧 Email: `{email}`\n"
                                     f"🎯 SheerID Status: `{sheerid_status}`\n"
-                                    f"📊 HTTP Status: `{click_result.get('status_code')}`\n\n"
+                                    f"📊 HTTP Status: `{click_result.get('status_code')}`\n"
+                                    f"💬 Message: {status_message}\n\n"
                                     "📋 *Alasan kemungkinan:*\n"
                                     "• Data tidak cocok dengan database SheerID\n"
                                     "• Informasi veteran tidak valid\n"
@@ -562,9 +641,13 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text=(
-                                "❌ *AUTO-CLICK FAILED*\n\n"
-                                f"Error: {click_result.get('message', 'Unknown')}\\n\n"
+                                "❌ *BROWSER AUTO-CLICK FAILED*\n\n"
+                                f"Error: {click_result.get('message', 'Unknown')}\n\n"
                                 f"🔗 Link: `{verification_link[:100]}...`\n\n"
+                                "Kemungkinan:\n"
+                                "• Browser timeout\n"
+                                "• Network error\n"
+                                "• Page tidak dapat diload\n\n"
                                 "Coba klik manual atau /veteran restart."
                             ),
                             parse_mode="Markdown"
@@ -577,6 +660,8 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(f"❌ Error in monitor_email_job: {e}")
+        import traceback
+        traceback.print_exc()
         await context.bot.send_message(
             chat_id=chat_id,
             text=(
@@ -814,7 +899,7 @@ async def submit_military_flow(
             return {"success": False, "message": str(e)}
 
 # =====================================================
-# CONVERSATION HANDLERS
+# CONVERSATION HANDLERS (sisanya sama seperti sebelumnya)
 # =====================================================
 
 async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -828,13 +913,13 @@ async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🎖 *Military / Veteran Verification Helper*\n\n"
-        "✨ *FULLY AUTOMATED BOT*\n"
+        "✨ *FULLY AUTOMATED BOT with REAL BROWSER*\n"
         "• Auto-generate temporary email\n"
-        "• Auto-extract emailToken (handle incomplete links)\n"
-        "• Auto-build complete verification link\n"
-        "• Auto-click untuk konfirmasi\n"
+        "• Auto-extract emailToken\n"
+        "• 🌐 **REAL BROWSER** automation (Chromium)\n"
+        "• 🖱️ **REAL CLICK** like human!\n"
         "• Auto-detect approval status\n"
-        "• Clear notifications (Approved/Not Approved)\n\n"
+        "• Clear notifications\n\n"
         "Kirim SheerID verification URL:\n\n"
         "`https://services.sheerid.com/verify/...?verificationId=...`\n\n"
         "Contoh:\n"
@@ -844,6 +929,9 @@ async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
     return V_URL
+
+# [Sisanya sama dengan script sebelumnya - veteran_get_url, veteran_status_callback, dll]
+# Copy dari script sebelumnya untuk handlers lainnya
 
 async def veteran_get_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1115,11 +1203,10 @@ async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TY
         "🤖 Bot akan:\n"
         "1️⃣ Submit data ke SheerID\n"
         "2️⃣ Monitor email inbox\n"
-        "3️⃣ Ekstrak emailToken (handle incomplete link)\n"
-        "4️⃣ Build complete verification link\n"
-        "5️⃣ Auto-click untuk konfirmasi\n"
-        "6️⃣ Detect approval status (Approved/Not Approved)\n"
-        "7️⃣ Send clear notification\n\n"
+        "3️⃣ 🌐 Launch REAL browser (Chromium)\n"
+        "4️⃣ 🖱️ CLICK link seperti manusia!\n"
+        "5️⃣ Detect approval status\n"
+        "6️⃣ Send notification\n\n"
         "Ketik `OK` untuk mulai, atau `/cancel` untuk batal."
     )
 
@@ -1191,9 +1278,8 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📧 Email: `{data['email']}`\n"
             f"🎯 Current status: `{status}`\n\n"
             "🔄 *Bot monitoring inbox...*\n"
-            "🖱️ Akan auto-click begitu email masuk!\n"
-            "🔧 Handle incomplete links otomatis!\n"
-            "📊 Detect approval status otomatis!\n\n"
+            "🌐 Browser automation ready!\n"
+            "🖱️ Akan mengeklik dengan browser asli!\n\n"
             "⏰ Checking email setiap 10 detik (max 5 menit)...",
             parse_mode="Markdown",
         )
@@ -1249,7 +1335,8 @@ def main():
 
     app.add_handler(veteran_conv)
 
-    print(f"🚀 {BOT_NAME} is running...")
+    print(f"🚀 {BOT_NAME} is running with BROWSER AUTOMATION...")
+    print(f"🌐 Browser: Chromium (headless)")
     print(f"📧 Custom email domain: {CUSTOM_DOMAIN}")
     print(f"🔧 Email API: {CUSTOM_MAIL_API}")
     print("="*50)
