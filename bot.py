@@ -39,34 +39,18 @@ BOT_NAME = os.environ.get("BOT_NAME", "VETERAN_BOT")
 
 SHEERID_BASE_URL = "https://services.sheerid.com"
 STEP_TIMEOUT = 300
+EMAIL_CHECK_INTERVAL = 10
 EMAIL_CHECK_TIMEOUT = 300
 
 # Rate limiting untuk avoid 429 error
+REQUEST_DELAY_MIN = 3  # Minimal 3 detik antar request
+REQUEST_DELAY_MAX = 6  # Maksimal 6 detik antar request
 MAX_RETRIES = 3
-RETRY_BASE_BACKOFF = 15  # Base backoff 15 detik (lebih aman)
+RETRY_BACKOFF = 5  # Initial backoff 5 detik
 
 # Custom Tempmail Worker URL
 CUSTOM_MAIL_API = "https://bot-emails.pilarjalar.workers.dev"
 CUSTOM_DOMAIN = "zzzz.biz.id"
-
-# =====================================================
-# RANDOM DELAY HELPERS
-# =====================================================
-
-async def random_delay(min_sec: float = 2.0, max_sec: float = 5.0):
-    """Random delay untuk avoid detection"""
-    delay = random.uniform(min_sec, max_sec)
-    await asyncio.sleep(delay)
-
-def get_random_email_interval() -> float:
-    """Random interval untuk email checking (8-12 detik)"""
-    return random.uniform(8.0, 12.0)
-
-def get_backoff_delay(attempt: int) -> float:
-    """Exponential backoff dengan jitter untuk retry"""
-    base_delay = RETRY_BASE_BACKOFF * (2 ** attempt)
-    jitter = random.uniform(0, 5)
-    return base_delay + jitter
 
 # =====================================================
 # RANDOM USER AGENTS - COMPREHENSIVE LIST
@@ -151,6 +135,7 @@ VIEWPORTS = [
     {'width': 1920, 'height': 1200},  # WUXGA
 ]
 
+
 # =====================================================
 # MILITARY ORGANIZATIONS - BERDASARKAN STATUS
 # =====================================================
@@ -215,6 +200,7 @@ def get_org_keyboard(status: str) -> InlineKeyboardMarkup:
 
     if status == "RESERVIST":
         # Gunakan organizations untuk Reservist/Guard
+        orgs = MIL_ORGS_RESERVIST
         buttons = [
             [InlineKeyboardButton("Army National Guard", callback_data="org_Army National Guard")],
             [InlineKeyboardButton("Army Reserve", callback_data="org_Army Reserve")],
@@ -332,43 +318,12 @@ def build_complete_verification_link(original_url: str, verification_id: str, em
     return complete_link
 
 # =====================================================
-# HUMAN BEHAVIOR SIMULATION
-# =====================================================
-
-async def simulate_human_behavior(page):
-    """Simulate human-like mouse movement and scrolling"""
-    try:
-        # Random scroll down
-        scroll_amount = random.randint(100, 400)
-        await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-        await random_delay(0.5, 1.5)
-
-        # Random mouse movement
-        try:
-            x = random.randint(100, 800)
-            y = random.randint(100, 600)
-            await page.mouse.move(x, y)
-            await random_delay(0.2, 0.8)
-        except:
-            pass
-
-        # Sometimes scroll back up a bit
-        if random.random() > 0.5:
-            scroll_back = random.randint(50, 150)
-            await page.evaluate(f"window.scrollBy(0, -{scroll_back})")
-            await random_delay(0.3, 1.0)
-
-    except Exception as e:
-        print(f"⚠️ Human behavior simulation warning: {e}")
-
-# =====================================================
-# BROWSER AUTOMATION - REAL CLICK WITH ANTI-DETECTION!
+# BROWSER AUTOMATION - REAL CLICK!
 # =====================================================
 
 async def click_verification_link_with_browser(verification_url: str) -> dict:
     """
     🎯 BROWSER AUTOMATION: Buka browser Chromium dan klik link seperti manusia!
-    ✨ Enhanced dengan human behavior simulation
     """
     browser = None
 
@@ -399,33 +354,18 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
             print(f"🎭 Using random UA: {random_ua[:60]}...")
             print(f"📐 Using random viewport: {random_viewport}")
 
-            # Create browser context dengan random user agent dan viewport + enhanced headers
+            # Create browser context dengan random user agent dan viewport
             context = await browser.new_context(
                 user_agent=random_ua,
                 viewport=random_viewport,
                 locale='en-US',
-                timezone_id='America/Los_Angeles',  # ✅ California timezone
-                permissions=['geolocation'],
-                geolocation={'latitude': 34.0522, 'longitude': -118.2437},  # LA coordinates
-                color_scheme='light',
-                extra_http_headers={
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'DNT': '1',
-                    'Upgrade-Insecure-Requests': '1',
-                    'Sec-Fetch-Dest': 'document',
-                    'Sec-Fetch-Mode': 'navigate',
-                    'Sec-Fetch-Site': 'none',
-                }
+                timezone_id='America/Los_Angeles'  # ✅ California timezone
             )
 
             # Create new page
             page = await context.new_page()
 
-            print(f"🖱️ Browser opened - simulating human behavior...")
-
-            # ✨ HUMAN BEHAVIOR: Random delay sebelum navigate
-            await random_delay(1.0, 2.5)
+            print(f"🖱️ Browser opened - navigating to verification link...")
 
             # Navigate ke URL - INI YANG BENAR-BENAR KLIK!
             response = await page.goto(
@@ -437,11 +377,8 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
             print(f"📊 Page loaded - Status: {response.status}")
             print(f"📍 Final URL: {page.url}")
 
-            # ✨ HUMAN BEHAVIOR: Simulate scrolling dan mouse movement
-            await simulate_human_behavior(page)
-
-            # Wait untuk JavaScript execution dengan random delay
-            await random_delay(2.5, 4.5)
+            # Wait untuk JavaScript execution
+            await asyncio.sleep(3)
 
             # Get visible text di page
             try:
@@ -459,7 +396,7 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
             not_approved_indicators = [
                 'not approved',
                 'We are unable',
-                'sourcesUnavailable',
+                'could not verify',
                 'unable to verify',
                 'verification failed',
                 'Try again',
@@ -473,7 +410,7 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
             success_indicators = [
                 'verified successfully',
                 'Enjoy 1 Year',
-                'continue',
+                'countinue',
                 'successfully verified',
                 'verification successful',
                 'you are verified',
@@ -571,7 +508,7 @@ async def click_verification_link_with_browser(verification_url: str) -> dict:
         }
 
 # =====================================================
-# EMAIL MONITORING JOB WITH RANDOM INTERVALS
+# EMAIL MONITORING JOB
 # =====================================================
 
 async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
@@ -688,22 +625,18 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
                         chat_id=chat_id,
                         text=(
                             "🔗 *Verification link ready!*\n\n"
-                            "🌐 Membuka browser...\n"
-                            "🖱️ Bot sedang mengklik!\n"
+                            "🌐 Membuka ...\n"
+                            "🖱️ Bot sedang berusaha!\n"
                             "⏳ Tunggu sebentar (30 detik max)..."
                         ),
                         parse_mode="Markdown"
                     )
 
-                    # ✨ Random delay sebelum klik (1-3 detik)
-                    await random_delay(1.0, 3.0)
-
                     # CLICK DENGAN BROWSER ASLI!
                     click_result = await click_verification_link_with_browser(verification_link)
 
                     if click_result.get("success") and click_result.get("clicked"):
-                        # ✨ Random delay setelah klik sebelum check status
-                        await random_delay(2.0, 4.0)
+                        await asyncio.sleep(2)
 
                         verification_id = email_data.get("verification_id")
                         status_check = await check_sheerid_status(verification_id)
@@ -851,7 +784,7 @@ async def monitor_email_job(context: ContextTypes.DEFAULT_TYPE):
         traceback.print_exc()
 
 def start_email_monitoring(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
-    """Start background job to monitor email dengan random interval"""
+    """Start background job to monitor email"""
     if context.job_queue is None:
         print("⚠️ JobQueue is None")
         return
@@ -861,19 +794,16 @@ def start_email_monitoring(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
     for job in current_jobs:
         job.schedule_removal()
 
-    # ✨ Gunakan random interval untuk email checking
-    random_interval = get_random_email_interval()
-
     context.job_queue.run_repeating(
         monitor_email_job,
-        interval=random_interval,
-        first=random_interval,
+        interval=EMAIL_CHECK_INTERVAL,
+        first=EMAIL_CHECK_INTERVAL,
         chat_id=chat_id,
         user_id=user_id,
         name=job_name
     )
 
-    print(f"🔄 Started email monitoring for user {user_id} (interval: {random_interval:.1f}s)")
+    print(f"🔄 Started email monitoring for user {user_id}")
 
 # =====================================================
 # LOGGING FUNCTIONS
@@ -989,456 +919,464 @@ async def check_sheerid_status(verification_id: str) -> dict:
             data = resp.json()
             return {"success": True, "status": data.get("currentStep", "unknown"), "data": data}
         except Exception as e:
-            print(f"❌ Status check error: {e}")
-            return {"success": False, "status": "error"}
+            return {"success": False, "status": "unknown", "message": str(e)}
 
-async def collect_military_status_with_retry(verification_id: str, status_value: str, org_id: int) -> dict:
-    """Call collectMilitaryStatus dengan exponential backoff retry"""
-    url = f"{SHEERID_BASE_URL}/rest/v2/verification/{verification_id}/step/collectMilitaryStatus"
-
-    payload = {
-        "status": status_value,
-        "organization": org_id,
-    }
-
-    for attempt in range(MAX_RETRIES):
-        try:
-            # ✨ Random delay sebelum request
-            if attempt > 0:
-                backoff = get_backoff_delay(attempt - 1)
-                print(f"⏳ Retry {attempt + 1}/{MAX_RETRIES} after {backoff:.1f}s...")
-                await asyncio.sleep(backoff)
-            else:
-                await random_delay(1.5, 3.0)
-
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(url, json=payload)
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return {"success": True, "data": data}
-                elif resp.status_code == 429:
-                    print(f"⚠️ Rate limited (429) on attempt {attempt + 1}")
-                    if attempt < MAX_RETRIES - 1:
-                        continue
-                    return {"success": False, "message": "Rate limit exceeded", "status_code": 429}
-                else:
-                    return {"success": False, "message": f"HTTP {resp.status_code}", "status_code": resp.status_code, "response": resp.text}
-
-        except Exception as e:
-            print(f"❌ collectMilitaryStatus error (attempt {attempt + 1}): {e}")
-            if attempt < MAX_RETRIES - 1:
-                continue
-            return {"success": False, "message": str(e)}
-
-    return {"success": False, "message": "Max retries exceeded"}
-
-async def collect_personal_info_with_retry(verification_id: str, first_name: str, last_name: str, 
-                                          birth_date: str, email: str, discharge_year: int, 
-                                          discharge_month: int, metadata: dict) -> dict:
-    """Call collectInactiveMilitaryPersonalInfo dengan exponential backoff retry"""
-    url = f"{SHEERID_BASE_URL}/rest/v2/verification/{verification_id}/step/collectInactiveMilitaryPersonalInfo"
-
-    payload = {
-        "firstName": first_name,
-        "lastName": last_name,
-        "birthDate": birth_date,
-        "email": email,
-        "dischargeYear": discharge_year,
-        "dischargeMonth": discharge_month,
-        "_meta": metadata
-    }
+async def submit_military_flow_with_retry(
+    verification_id: str,
+    status: str,
+    first_name: str,
+    last_name: str,
+    birth_date: str,
+    email: str,
+    org: dict,
+    discharge_date: str,
+) -> dict:
+    """Submit dengan retry logic dan exponential backoff untuk handle 429"""
 
     for attempt in range(MAX_RETRIES):
         try:
-            # ✨ Random delay sebelum request
+            # Delay antar request untuk avoid rate limit
             if attempt > 0:
-                backoff = get_backoff_delay(attempt - 1)
-                print(f"⏳ Retry {attempt + 1}/{MAX_RETRIES} after {backoff:.1f}s...")
-                await asyncio.sleep(backoff)
+                backoff_delay = RETRY_BACKOFF * (2 ** (attempt - 1))
+                print(f"⏳ Waiting {backoff_delay}s before retry (attempt {attempt + 1}/{MAX_RETRIES})...")
+                await asyncio.sleep(backoff_delay)
             else:
-                await random_delay(2.0, 4.0)
+                await asyncio.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))  # Random delay 3-6 detik
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(url, json=payload)
+            result = await submit_military_flow(
+                verification_id, status, first_name, last_name,
+                birth_date, email, org, discharge_date
+            )
 
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return {"success": True, "data": data}
-                elif resp.status_code == 429:
-                    print(f"⚠️ Rate limited (429) on attempt {attempt + 1}")
-                    if attempt < MAX_RETRIES - 1:
-                        continue
-                    return {"success": False, "message": "Rate limit exceeded", "status_code": 429}
+            # Jika 429, retry
+            if not result.get("success"):
+                error_msg = result.get("message", "")
+                if "429" in error_msg or "rate limit" in error_msg.lower() or "limit" in error_msg.lower():
+                    print(f"⚠️ Rate limit hit (429), will retry...")
+                    continue
                 else:
-                    return {"success": False, "message": f"HTTP {resp.status_code}", "status_code": resp.status_code, "response": resp.text}
+                    return result  # Error lain, langsung return
+
+            return result
 
         except Exception as e:
-            print(f"❌ collectPersonalInfo error (attempt {attempt + 1}): {e}")
-            if attempt < MAX_RETRIES - 1:
-                continue
-            return {"success": False, "message": str(e)}
+            print(f"❌ Attempt {attempt + 1} failed: {e}")
+            if attempt == MAX_RETRIES - 1:
+                return {"success": False, "message": f"All {MAX_RETRIES} attempts failed: {str(e)}"}
 
     return {"success": False, "message": "Max retries exceeded"}
+
+async def submit_military_flow(
+    verification_id: str,
+    status: str,
+    first_name: str,
+    last_name: str,
+    birth_date: str,
+    email: str,
+    org: dict,
+    discharge_date: str,
+) -> dict:
+    """Submit military info ke SheerID"""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            step1_url = f"{SHEERID_BASE_URL}/rest/v2/verification/{verification_id}/step/collectMilitaryStatus"
+            step1_body = {"status": status}
+
+            print(f"📤 Step 1 URL: {step1_url}")
+            print(f"📦 Step 1 Payload: {step1_body}")
+
+            r1 = await client.post(step1_url, json=step1_body)
+
+            print(f"📥 Step 1 Response: {r1.status_code}")
+            print(f"📥 Step 1 Body: {r1.text[:500]}")
+
+            if r1.status_code == 429:
+                return {
+                    "success": False, 
+                    "message": f"Rate limit (429) at step 1: {r1.text}"
+                }
+
+            if r1.status_code != 200:
+                return {
+                    "success": False, 
+                    "message": f"collectMilitaryStatus failed: {r1.status_code} - {r1.text}"
+                }
+
+            d1 = r1.json()
+            submission_url = d1.get("submissionUrl")
+
+            if not submission_url:
+                return {"success": False, "message": "No submissionUrl in step 1 response"}
+
+            print(f"✅ Got submissionUrl: {submission_url}")
+
+            # Delay sebelum step 2
+            await asyncio.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))  # Random delay 3-6 detik
+
+            submission_opt_in = (
+                "By submitting the personal information above, I acknowledge that my personal "
+                "information is being collected under the privacy policy of the business from "
+                "which I am seeking a discount, and I understand that my personal information "
+                "will be shared with SheerID as a processor/third-party service provider in "
+                "order for SheerID to confirm my eligibility for a special offer."
+            )
+
+            payload2 = {
+                "firstName": first_name,
+                "lastName": last_name,
+                "birthDate": birth_date,
+                "email": email,
+                "phoneNumber": "",
+                "organization": {
+                    "id": org["id"],
+                    "name": org["name"]
+                },
+                "dischargeDate": discharge_date,
+                "locale": "en-US",
+                "country": "US",
+                "metadata": {
+                    "marketConsentValue": False,
+                    "refererUrl": "",
+                    "verificationId": verification_id,
+                    "submissionOptIn": submission_opt_in,
+                },
+            }
+
+            print(f"📤 Step 2 URL (submissionUrl): {submission_url}")
+
+            r2 = await client.post(submission_url, json=payload2)
+
+            print(f"📥 Step 2 Response: {r2.status_code}")
+
+            if r2.status_code == 429:
+                return {
+                    "success": False, 
+                    "message": f"Rate limit (429) at step 2: {r2.text}"
+                }
+
+            if r2.status_code != 200:
+                return {
+                    "success": False, 
+                    "message": f"collectInactiveMilitaryPersonalInfo failed: {r2.status_code} - {r2.text}"
+                }
+
+            return {"success": True, "message": "Military info submitted successfully"}
+
+        except Exception as e:
+            print(f"❌ Exception in submit_military_flow: {e}")
+            return {"success": False, "message": str(e)}
 
 # =====================================================
 # CONVERSATION HANDLERS
 # =====================================================
 
 async def veteran_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler untuk /veteran command"""
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
 
-    # Clear existing data
+    await log_user_start(update, "/veteran")
     v_user_data.pop(user_id, None)
-    temp_email_storage.pop(user_id, None)
     clear_all_timeouts(context, user_id)
-
-    await log_user_start(update, "VETERAN")
+    set_step_timeout(context, chat_id, user_id, "URL")
 
     await update.message.reply_text(
-        "🎖️ *VETERAN VERIFICATION BOT*\n\n"
-        "Bot ini akan membantu verifikasi status veteran kamu melalui SheerID.\n\n"
-        "📋 *Yang dibutuhkan:*\n"
-        "• Verification URL (dari SheerID)\n"
-        "• Status military (Active/Veteran/Reservist)\n"
-        "• Organization/Branch\n"
-        "• Nama lengkap\n"
-        "• Tanggal lahir\n"
-        "• Tanggal discharge (untuk veteran)\n\n"
-        "🔗 *Kirimkan verification URL SheerID kamu*\n"
-        "Format: `https://services.sheerid.com/verify/...`",
-        parse_mode="Markdown"
+        "🎖 *Military / Veteran Verification Helper*\n\n"
+        "✨ *Org-Lemah AUTOMATED BOT*\n"
+        "• Auto-generate temporary email\n"
+        "• Auto-extract emailToken\n"
+        "• 🌐 **REAL BROWSER**\n"
+        "• 🖱️ **REAL CLICK** like human!\n"
+        "• Auto-detect approval status\n"
+        "• Clear notifications (Approved/Not Approved)\n"
+        "• ⚡ Rate limiting protection\n\n"
+        "Kirim SheerID verification URL:\n\n"
+        "`https://services.sheerid.com/verify/...?verificationId=...`\n\n"
+        "Contoh:\n"
+        "`https://services.sheerid.com/verify/abcd/?verificationId=1234`\n\n"
+        "📅 *Note: Format tanggal YYYY-MM-DD*\n\n"
+        "*⏰ Kamu punya 5 menit*",
+        parse_mode="Markdown",
     )
-
-    set_step_timeout(context, update.effective_chat.id, user_id, "URL")
     return V_URL
 
-async def veteran_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Terima verification URL"""
+async def veteran_get_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    url_text = update.message.text.strip()
+    chat_id = update.effective_chat.id
+    url = update.message.text.strip()
 
-    # Extract verificationId dari URL
-    match = re.search(r'verificationId=([a-f0-9]+)', url_text, re.IGNORECASE)
+    match = re.search(r"verificationId=([A-Za-z0-9\-]+)", url)
     if not match:
         await update.message.reply_text(
-            "❌ *URL tidak valid!*\n\n"
-            "Pastikan URL mengandung `verificationId`.\n"
-            "Contoh: `https://services.sheerid.com/verify/xxx?verificationId=abc123`",
-            parse_mode="Markdown"
+            "❌ *Invalid URL!*\n\n"
+            "Harus ada parameter `verificationId=...`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
         )
+        set_step_timeout(context, chat_id, user_id, "URL")
         return V_URL
 
     verification_id = match.group(1)
-
     v_user_data[user_id] = {
         "verification_id": verification_id,
-        "original_url": url_text
+        "original_url": url
     }
 
-    await update.message.reply_text(
-        f"✅ *Verification ID diterima!*\n\n"
-        f"ID: `{verification_id}`\n\n"
-        "🎖️ *Pilih status military kamu:*",
-        reply_markup=STATUS_KEYBOARD,
-        parse_mode="Markdown"
-    )
-
     clear_all_timeouts(context, user_id)
-    set_step_timeout(context, update.effective_chat.id, user_id, "STATUS")
+    set_step_timeout(context, chat_id, user_id, "STATUS")
+
+    await update.message.reply_text(
+        f"✅ *Verification ID:* `{verification_id}`\n\n"
+        "Pilih *military status* kamu:",
+        parse_mode="Markdown",
+        reply_markup=STATUS_KEYBOARD,
+    )
     return V_STATUS
 
-async def veteran_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle status selection"""
+async def veteran_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     user_id = query.from_user.id
+    chat_id = query.message.chat_id
 
     if user_id not in v_user_data:
-        await query.message.reply_text("❌ Session expired. Mulai lagi dengan /veteran")
+        await query.edit_message_text("❌ *Session expired*\n\nKirim /veteran lagi.", parse_mode="Markdown")
         return ConversationHandler.END
 
-    status_value = query.data.replace("status_", "")
-    v_user_data[user_id]["status"] = status_value
+    data = query.data
+    if not data.startswith("status_"):
+        await query.edit_message_text("❌ Invalid status.\n\nKirim /veteran lagi.", parse_mode="Markdown")
+        return ConversationHandler.END
 
-    status_name_map = {
+    status = data.split("_", 1)[1]
+
+    # Map status ke display name
+    status_display = {
         "ACTIVE_DUTY": "Active Duty",
         "VETERAN": "Military Veteran or Retiree",
         "RESERVIST": "Reservist or National Guard"
     }
 
-    await query.message.edit_text(
-        f"✅ Status: *{status_name_map.get(status_value, status_value)}*\n\n"
-        "🏛️ *Pilih Organization/Branch:*",
-        reply_markup=get_org_keyboard(status_value),
-        parse_mode="Markdown"
-    )
+    v_user_data[user_id]["status"] = status
 
     clear_all_timeouts(context, user_id)
-    set_step_timeout(context, query.message.chat_id, user_id, "ORG")
+    set_step_timeout(context, chat_id, user_id, "ORG")
+
+    # Generate organization keyboard berdasarkan status
+    org_keyboard = get_org_keyboard(status)
+
+    await query.edit_message_text(
+        f"✅ Status: *{status_display.get(status, status)}*\n\n"
+        "Pilih *branch of service*:",
+        parse_mode="Markdown",
+        reply_markup=org_keyboard,
+    )
     return V_ORG
 
-async def veteran_org(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle organization selection"""
+async def veteran_org_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     user_id = query.from_user.id
+    chat_id = query.message.chat_id
 
     if user_id not in v_user_data:
-        await query.message.reply_text("❌ Session expired. Mulai lagi dengan /veteran")
+        await query.edit_message_text("❌ *Session expired*\n\nKirim /veteran lagi.", parse_mode="Markdown")
         return ConversationHandler.END
 
-    org_name = query.data.replace("org_", "")
+    data = query.data
+    if not data.startswith("org_"):
+        await query.edit_message_text("❌ Invalid organization.\n\nKirim /veteran lagi.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    org_name = data.split("_", 1)[1]
+
+    # Get organization dari dict yang sesuai dengan status
     status = v_user_data[user_id].get("status")
-
-    # Get org ID based on status
     if status == "RESERVIST":
-        org_data = MIL_ORGS_RESERVIST.get(org_name)
+        org = MIL_ORGS_RESERVIST.get(org_name)
     else:
-        org_data = MIL_ORGS_ACTIVE_VETERAN.get(org_name)
+        org = MIL_ORGS_ACTIVE_VETERAN.get(org_name)
 
-    if not org_data:
-        await query.message.reply_text("❌ Organization tidak valid")
-        return V_ORG
+    if not org:
+        await query.edit_message_text("❌ Unknown organization.\n\nKirim /veteran lagi.", parse_mode="Markdown")
+        return ConversationHandler.END
 
-    v_user_data[user_id]["organization"] = org_name
-    v_user_data[user_id]["organization_id"] = org_data["id"]
-
-    await query.message.edit_text(
-        f"✅ Organization: *{org_name}*\n\n"
-        "👤 *Kirim nama lengkap kamu*\n"
-        "Format: FirstName LastName\n"
-        "Contoh: `John Smith`",
-        parse_mode="Markdown"
-    )
+    v_user_data[user_id]["organization"] = org
 
     clear_all_timeouts(context, user_id)
-    set_step_timeout(context, query.message.chat_id, user_id, "NAME")
+    set_step_timeout(context, chat_id, user_id, "NAME")
+
+    await query.edit_message_text(
+        f"✅ Branch: *{org['name']}*\n\n"
+        "Kirim *nama lengkap* kamu:\n"
+        "Format: `FirstName LastName`\n\n"
+        "Contoh: `John Doe`\n\n"
+        "*⏰ Kamu punya 5 menit*",
+        parse_mode="Markdown",
+    )
     return V_NAME
 
-async def veteran_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Terima nama lengkap"""
+async def veteran_get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    name_input = update.message.text.strip()
 
-    if user_id not in v_user_data:
-        await update.message.reply_text("❌ Session expired. Mulai lagi dengan /veteran")
-        return ConversationHandler.END
-
-    full_name = update.message.text.strip()
-    name_parts = full_name.split(maxsplit=1)
-
-    if len(name_parts) < 2:
+    parts = name_input.split(maxsplit=1)
+    if len(parts) < 2:
         await update.message.reply_text(
-            "❌ *Nama tidak lengkap!*\n\n"
-            "Kirim FirstName dan LastName.\n"
-            "Contoh: `John Smith`",
-            parse_mode="Markdown"
+            "❌ *Format nama salah!*\n\n"
+            "Harus ada First Name dan Last Name.\n"
+            "Format: `FirstName LastName`\n\n"
+            "Contoh: `John Doe`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
         )
+        set_step_timeout(context, chat_id, user_id, "NAME")
         return V_NAME
 
-    first_name, last_name = name_parts[0], name_parts[1]
+    first_name = parts[0]
+    last_name = parts[1]
 
     v_user_data[user_id]["first_name"] = first_name
     v_user_data[user_id]["last_name"] = last_name
 
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "BIRTH")
+
     await update.message.reply_text(
         f"✅ Nama: *{first_name} {last_name}*\n\n"
-        "📅 *Kirim tanggal lahir*\n"
-        "Format: YYYY-MM-DD\n"
-        "Contoh: `1990-05-15`",
-        parse_mode="Markdown"
+        "Kirim *tanggal lahir* kamu:\n"
+        "Format: `YYYY-MM-DD`\n\n"
+        "Contoh: `1990-05-15`\n\n"
+        "*⏰ Kamu punya 5 menit*",
+        parse_mode="Markdown",
     )
-
-    clear_all_timeouts(context, user_id)
-    set_step_timeout(context, update.effective_chat.id, user_id, "BIRTH")
     return V_BIRTH
 
-async def veteran_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Terima birth date"""
+async def veteran_get_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
-    if user_id not in v_user_data:
-        await update.message.reply_text("❌ Session expired. Mulai lagi dengan /veteran")
-        return ConversationHandler.END
-
+    chat_id = update.effective_chat.id
     birth_date = update.message.text.strip()
 
     # Validate format YYYY-MM-DD
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', birth_date):
         await update.message.reply_text(
             "❌ *Format tanggal salah!*\n\n"
-            "Gunakan format: YYYY-MM-DD\n"
-            "Contoh: `1990-05-15`",
-            parse_mode="Markdown"
+            "Harus format `YYYY-MM-DD`\n\n"
+            "Contoh: `1990-05-15`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
         )
+        set_step_timeout(context, chat_id, user_id, "BIRTH")
         return V_BIRTH
 
     v_user_data[user_id]["birth_date"] = birth_date
 
-    status = v_user_data[user_id].get("status")
-
-    # Jika Active Duty, skip discharge date
-    if status == "ACTIVE_DUTY":
-        v_user_data[user_id]["discharge_year"] = None
-        v_user_data[user_id]["discharge_month"] = None
-        return await show_confirmation(update, context)
+    clear_all_timeouts(context, user_id)
+    set_step_timeout(context, chat_id, user_id, "DISCHARGE")
 
     await update.message.reply_text(
-        f"✅ Birth Date: *{birth_date}*\n\n"
-        "📅 *Kirim tanggal discharge*\n"
-        "Format: YYYY-MM\n"
-        "Contoh: `2023-06`",
-        parse_mode="Markdown"
+        f"✅ Birth date: *{birth_date}*\n\n"
+        "Kirim *discharge date* (tanggal keluar dari dinas):\n"
+        "Format: `YYYY-MM-DD`\n\n"
+        "Contoh: `2020-08-30`\n\n"
+        "*⏰ Kamu punya 5 menit*",
+        parse_mode="Markdown",
     )
-
-    clear_all_timeouts(context, user_id)
-    set_step_timeout(context, update.effective_chat.id, user_id, "DISCHARGE")
     return V_DISCHARGE
 
-async def veteran_discharge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Terima discharge date"""
+async def veteran_get_discharge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    discharge_date = update.message.text.strip()
 
-    if user_id not in v_user_data:
-        await update.message.reply_text("❌ Session expired. Mulai lagi dengan /veteran")
-        return ConversationHandler.END
-
-    discharge_text = update.message.text.strip()
-
-    # Validate format YYYY-MM
-    match = re.match(r'^(\d{4})-(\d{2})$', discharge_text)
-    if not match:
+    # Validate format YYYY-MM-DD
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', discharge_date):
         await update.message.reply_text(
             "❌ *Format tanggal salah!*\n\n"
-            "Gunakan format: YYYY-MM\n"
-            "Contoh: `2023-06`",
-            parse_mode="Markdown"
+            "Harus format `YYYY-MM-DD`\n\n"
+            "Contoh: `2020-08-30`\n\n"
+            "*⏰ Kamu punya 5 menit lagi*",
+            parse_mode="Markdown",
         )
+        set_step_timeout(context, chat_id, user_id, "DISCHARGE")
         return V_DISCHARGE
 
-    discharge_year = int(match.group(1))
-    discharge_month = int(match.group(2))
+    v_user_data[user_id]["discharge_date"] = discharge_date
 
-    v_user_data[user_id]["discharge_year"] = discharge_year
-    v_user_data[user_id]["discharge_month"] = discharge_month
+    clear_all_timeouts(context, user_id)
 
-    return await show_confirmation(update, context)
-
-async def show_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Tampilkan konfirmasi data"""
-    user_id = update.effective_user.id
+    # Show confirmation
     data = v_user_data[user_id]
 
-    status_map = {
+    status_display = {
         "ACTIVE_DUTY": "Active Duty",
         "VETERAN": "Military Veteran or Retiree",
         "RESERVIST": "Reservist or National Guard"
     }
 
-    confirmation_text = (
-        "📋 *KONFIRMASI DATA*\n\n"
-        f"🎖️ Status: {status_map.get(data['status'], data['status'])}\n"
-        f"🏛️ Organization: {data['organization']}\n"
-        f"👤 Nama: {data['first_name']} {data['last_name']}\n"
-        f"📅 Tanggal Lahir: {data['birth_date']}\n"
+    confirm_text = (
+        "📋 *Konfirmasi Data*\n\n"
+        f"Status: `{status_display.get(data['status'], data['status'])}`\n"
+        f"Branch: `{data['organization']['name']}`\n"
+        f"Name: `{data['first_name']} {data['last_name']}`\n"
+        f"Birth Date: `{data['birth_date']}`\n"
+        f"Discharge Date: `{discharge_date}`\n\n"
+        "Apakah data sudah benar?"
     )
 
-    if data.get("discharge_year"):
-        confirmation_text += f"📅 Discharge: {data['discharge_year']}-{data['discharge_month']:02d}\n"
-
-    confirmation_text += "\n✅ *Data sudah benar?*"
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Ya, Lanjutkan", callback_data="confirm_yes"),
-            InlineKeyboardButton("❌ Batal", callback_data="confirm_no")
-        ]
+    confirm_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Benar, Lanjutkan", callback_data="confirm_yes")],
+        [InlineKeyboardButton("❌ Batal", callback_data="confirm_no")],
     ])
 
     await update.message.reply_text(
-        confirmation_text,
-        reply_markup=keyboard,
-        parse_mode="Markdown"
+        confirm_text,
+        parse_mode="Markdown",
+        reply_markup=confirm_keyboard,
     )
-
-    clear_all_timeouts(context, user_id)
     return V_CONFIRM
 
-async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle konfirmasi"""
+async def veteran_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     user_id = query.from_user.id
+    chat_id = query.message.chat_id
+
+    if user_id not in v_user_data:
+        await query.edit_message_text("❌ *Session expired*\n\nKirim /veteran lagi.", parse_mode="Markdown")
+        return ConversationHandler.END
 
     if query.data == "confirm_no":
-        v_user_data.pop(user_id, None)
-        await query.message.edit_text(
-            "❌ *Verifikasi dibatalkan*\n\n"
+        await query.edit_message_text(
+            "❌ *Verification dibatalkan*\n\n"
             "Kirim /veteran untuk mulai lagi.",
             parse_mode="Markdown"
         )
-        return ConversationHandler.END
-
-    # Proceed dengan verifikasi
-    data = v_user_data[user_id]
-
-    await query.message.edit_text(
-        "🔄 *Memproses verifikasi...*\n\n"
-        "⏳ Tunggu sebentar...",
-        parse_mode="Markdown"
-    )
-
-    # ✨ Random delay sebelum mulai proses
-    await random_delay(1.0, 2.5)
-
-    # Step 1: collectMilitaryStatus
-    await query.message.edit_text(
-        "🔄 *Step 1/3: Mengirim military status...*",
-        parse_mode="Markdown"
-    )
-
-    status_result = await collect_military_status_with_retry(
-        data["verification_id"],
-        data["status"],
-        data["organization_id"]
-    )
-
-    if not status_result["success"]:
-        error_msg = status_result.get("message", "Unknown error")
-        await query.message.edit_text(
-            f"❌ *SUBMISSION FAILED*\n\n"
-            f"Error: collectMilitaryStatus failed: {error_msg}\n\n"
-            "Coba lagi atau /veteran restart.",
-            parse_mode="Markdown"
-        )
-        await log_verification_result(
-            user_id,
-            f"{data['first_name']} {data['last_name']}",
-            "N/A",
-            "failed_status",
-            False,
-            error_msg
-        )
         v_user_data.pop(user_id, None)
         return ConversationHandler.END
 
-    # ✨ Random delay antara steps
-    await random_delay(2.0, 4.0)
-
-    # Step 2: Generate email
-    await query.message.edit_text(
-        "🔄 *Step 2/3: Generating temporary email...*",
+    # confirm_yes - Process verification
+    await query.edit_message_text(
+        "⏳ *Processing verification...*\n\n"
+        "🔄 Step 1: Generating temp email...\n"
+        "⏳ Step 2: Submitting to SheerID...\n"
+        "⏳ Step 3: Monitoring email...\n\n"
+        "Tunggu sebentar...",
         parse_mode="Markdown"
     )
 
+    data = v_user_data[user_id]
+
+    # Generate temp email
     email_result = await create_temp_email()
-    if not email_result["success"]:
-        await query.message.edit_text(
-            "❌ *Email generation failed*\n\nCoba lagi nanti.",
+    if not email_result.get("success"):
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "❌ *Gagal generate email*\n\n"
+                f"Error: {email_result.get('message')}\n\n"
+                "Coba lagi dengan /veteran"
+            ),
             parse_mode="Markdown"
         )
         v_user_data.pop(user_id, None)
@@ -1446,60 +1384,64 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     email = email_result["email"]
 
-    # ✨ Random delay sebelum submit personal info
-    await random_delay(2.0, 3.5)
-
-    # Step 3: collectInactiveMilitaryPersonalInfo
-    await query.message.edit_text(
-        f"🔄 *Step 3/3: Submitting personal info...*\n\n"
-        f"📧 Email: `{email}`",
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"✅ *Email generated:* `{email}`\n\n"
+            "🔄 Submitting data ke SheerID API...\n"
+            "⏳ Please wait..."
+        ),
         parse_mode="Markdown"
     )
 
-    # Prepare metadata (extract dari original URL if any)
-    metadata = {"locale": "en-US"}
-
-    personal_result = await collect_personal_info_with_retry(
-        data["verification_id"],
-        data["first_name"],
-        data["last_name"],
-        data["birth_date"],
-        email,
-        data.get("discharge_year") or 0,
-        data.get("discharge_month") or 0,
-        metadata
+    # Submit to SheerID dengan retry logic
+    submit_result = await submit_military_flow_with_retry(
+        verification_id=data["verification_id"],
+        status=data["status"],
+        first_name=data["first_name"],
+        last_name=data["last_name"],
+        birth_date=data["birth_date"],
+        email=email,
+        org=data["organization"],
+        discharge_date=data["discharge_date"]
     )
 
-    if not personal_result["success"]:
-        error_msg = personal_result.get("message", "Unknown error")
-        await query.message.edit_text(
-            f"❌ *SUBMISSION FAILED*\n\n"
-            f"Error: {error_msg}\n\n"
-            "Coba lagi atau /veteran restart.",
+    if not submit_result.get("success"):
+        error_msg = submit_result.get("message", "Unknown error")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "❌ *SUBMISSION FAILED*\n\n"
+                f"Error: {error_msg}\n\n"
+                "Coba lagi atau /veteran restart."
+            ),
             parse_mode="Markdown"
         )
+        await delete_email_inbox(email)
+        v_user_data.pop(user_id, None)
         await log_verification_result(
-            user_id,
-            f"{data['first_name']} {data['last_name']}",
-            email,
-            "failed_personal",
-            False,
+            user_id, 
+            f"{data['first_name']} {data['last_name']}", 
+            email, 
+            "error", 
+            False, 
             error_msg
         )
-        v_user_data.pop(user_id, None)
         return ConversationHandler.END
 
-    # Success - start email monitoring
-    await query.message.edit_text(
-        "✅ *SUBMISSION SUCCESS!*\n\n"
-        f"📧 Email: `{email}`\n\n"
-        "🔄 *Monitoring email untuk verification link...*\n"
-        "⏳ Bot akan otomatis klik link saat email masuk.\n\n"
-        "Tunggu maksimal 5 menit...",
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "✅ *Data submitted successfully!*\n\n"
+            f"📧 Monitoring email: `{email}`\n"
+            "🔄 Checking inbox setiap 10 detik...\n\n"
+            "⏳ Bot akan otomatis klik verification link jika email masuk.\n"
+            "Max wait time: 5 menit."
+        ),
         parse_mode="Markdown"
     )
 
-    # Store email data untuk monitoring
+    # Store email data untuk monitoring job
     temp_email_storage[user_id] = {
         "email": email,
         "verification_id": data["verification_id"],
@@ -1507,8 +1449,8 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "check_count": 0
     }
 
-    # Start email monitoring job
-    start_email_monitoring(context, query.message.chat_id, user_id)
+    # Start email monitoring
+    start_email_monitoring(context, chat_id, user_id)
 
     await log_verification_result(
         user_id,
@@ -1518,24 +1460,19 @@ async def veteran_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         True
     )
 
-    clear_all_timeouts(context, user_id)
     v_user_data.pop(user_id, None)
-
     return ConversationHandler.END
 
-async def veteran_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel conversation"""
+async def cancel_veteran(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     v_user_data.pop(user_id, None)
-    temp_email_storage.pop(user_id, None)
     clear_all_timeouts(context, user_id)
 
     await update.message.reply_text(
-        "❌ *Verifikasi dibatalkan*\n\n"
+        "❌ *Verification cancelled*\n\n"
         "Kirim /veteran untuk mulai lagi.",
         parse_mode="Markdown"
     )
-
     return ConversationHandler.END
 
 # =====================================================
@@ -1543,52 +1480,51 @@ async def veteran_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =====================================================
 
 def main():
-    """Main function"""
-    if not BOT_TOKEN:
-        print("❌ BOT_TOKEN tidak ditemukan!")
-        return
+    """Start the bot"""
 
-    # Custom request dengan timeout lebih besar
-    request = HTTPXRequest(
-        connection_pool_size=20,
-        connect_timeout=30.0,
-        read_timeout=30.0,
-        write_timeout=30.0,
-        pool_timeout=30.0,
+    # Custom request dengan timeout lebih panjang
+    request = HTTPXRequest(connection_pool_size=8, read_timeout=30, write_timeout=30, connect_timeout=30)
+
+    # Build application dengan JobQueue
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .request(request)
+        .build()
     )
 
-    app = Application.builder().token(BOT_TOKEN).request(request).build()
-
-    # Conversation handler untuk veteran verification
+    # Veteran conversation handler
     veteran_conv = ConversationHandler(
         entry_points=[CommandHandler("veteran", veteran_start)],
         states={
-            V_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_url)],
-            V_STATUS: [CallbackQueryHandler(veteran_status, pattern=r"^status_")],
-            V_ORG: [CallbackQueryHandler(veteran_org, pattern=r"^org_")],
-            V_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_name)],
-            V_BIRTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_birth)],
-            V_DISCHARGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_discharge)],
-            V_CONFIRM: [CallbackQueryHandler(veteran_confirm, pattern=r"^confirm_")],
+            V_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_url)],
+            V_STATUS: [CallbackQueryHandler(veteran_status_callback, pattern="^status_")],
+            V_ORG: [CallbackQueryHandler(veteran_org_callback, pattern="^org_")],
+            V_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_name)],
+            V_BIRTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_birth)],
+            V_DISCHARGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, veteran_get_discharge)],
+            V_CONFIRM: [CallbackQueryHandler(veteran_confirm_callback, pattern="^confirm_")],
         },
-        fallbacks=[CommandHandler("cancel", veteran_cancel)],
+        fallbacks=[CommandHandler("cancel", cancel_veteran)],
+        conversation_timeout=STEP_TIMEOUT,
+        per_message=False,
         per_chat=True,
         per_user=True,
-        per_message=False,
     )
 
-    app.add_handler(veteran_conv)
+    application.add_handler(veteran_conv)
 
-    print(f"🚀 {BOT_NAME} is starting...")
-    print(f"✅ Anti-detection features enabled:")
-    print(f"   • Random User-Agent ({len(USER_AGENTS)} variants)")
-    print(f"   • Random Viewport ({len(VIEWPORTS)} sizes)")
-    print(f"   • Random delays (2-5s)")
-    print(f"   • Human behavior simulation")
-    print(f"   • Exponential backoff retry")
-    print(f"   • Email monitoring with random intervals")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    print(f"🤖 Bot started: {BOT_NAME}")
+    print(f"🔄 Request delay: {REQUEST_DELAY_MIN}-{REQUEST_DELAY_MAX}s (random)")
+    print(f"🔁 Max retries: {MAX_RETRIES}")
+    print(f"✅ JobQueue enabled for email monitoring")
 
+    # Run bot
+    application.run_polling(
+    allowed_updates=Update.ALL_TYPES,
+    drop_pending_updates=True  # 
+    )
+   
 
 if __name__ == "__main__":
     main()
